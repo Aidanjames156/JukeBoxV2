@@ -16,6 +16,9 @@
 **/build
 **/coverage
 
+# Docs
+README.md
+
 # Logs
 **/logs
 **/*.log

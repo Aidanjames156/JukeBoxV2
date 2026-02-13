@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 type User = {
@@ -93,7 +94,7 @@ export default function Home() {
         { credentials: "include" }
       );
       if (response.status === 401) {
-        setError("Please sign in with Spotify to search.");
+        setError("Search requires Spotify authentication.");
         setResults([]);
         return;
       }
@@ -135,60 +136,99 @@ export default function Home() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-50">
-      <main className="w-full max-w-5xl space-y-8 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-10 shadow-2xl">
-        <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-2">
-            <p className="text-sm uppercase tracking-[0.3em] text-zinc-400">
-              Jukebox
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight">
-              Rate and review the albums you love.
-            </h1>
-            <p className="text-zinc-400">
-              Search Spotify and build your review library.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            {!authChecked && (
-              <span className="text-xs text-zinc-500">Checking session...</span>
-            )}
-            {user ? (
-              <>
-                <span className="text-sm text-zinc-300">
-                  Signed in as{" "}
-                  <span className="font-semibold text-zinc-50">
-                    {user.display_name || user.spotify_id}
-                  </span>
-                </span>
-                <button
-                  className="rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-200 transition hover:border-zinc-500"
-                  onClick={handleLogout}
-                >
-                  Log out
-                </button>
-              </>
-            ) : (
-              <a
-                className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-6 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400"
-                href={`${apiUrl}/auth/spotify`}
+    <div className="min-h-screen px-4 py-10 text-[color:var(--foreground)]">
+      <main className="mx-auto w-full max-w-6xl space-y-10">
+        <header className="flex flex-col gap-6 border-b border-[color:var(--border)] pb-6">
+          <div className="flex flex-wrap items-center justify-between gap-6">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-none bg-[color:var(--accent)] text-lg font-bold text-[#0a140c]">
+                J
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.4em] text-[var(--muted)]">
+                  Jukebox
+                </p>
+                <p className="font-mono text-xl font-semibold tracking-tight">
+                  Album diary for music obsessives
+                </p>
+              </div>
+            </div>
+            <nav className="flex flex-wrap items-center gap-3 text-sm text-[var(--muted)]">
+              <span className="rounded-none border border-[color:var(--border)] px-4 py-2 text-[var(--foreground)]">
+                Search
+              </span>
+              <Link
+                href="/profile"
+                className="rounded-none border border-[color:var(--border)] px-4 py-2 text-[var(--foreground)] transition hover:border-[var(--accent)]"
               >
-                Continue with Spotify
-              </a>
-            )}
+                Profile
+              </Link>
+            </nav>
+            <div className="flex flex-wrap items-center gap-3">
+              {!authChecked && (
+                <span className="text-xs text-[var(--muted)]">
+                  Checking session...
+                </span>
+              )}
+              {user ? (
+                <>
+                  <span className="text-sm text-[var(--muted)]">
+                    Signed in as{" "}
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {user.display_name || user.spotify_id}
+                    </span>
+                  </span>
+                  <button
+                    className="rounded-none border border-[color:var(--border)] px-4 py-2 text-sm text-[var(--foreground)] transition hover:border-[var(--accent)]"
+                    onClick={handleLogout}
+                  >
+                    Log out
+                  </button>
+                </>
+              ) : (
+                <a
+                  className="inline-flex items-center justify-center rounded-none bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)]"
+                  href={`${apiUrl}/auth/spotify`}
+                >
+                  Continue with Spotify
+                </a>
+              )}
+            </div>
+          </div>
+          <div className="grid gap-6 md:grid-cols-[1.4fr_1fr]">
+            <div className="space-y-3">
+              <h1 className="text-3xl font-semibold tracking-tight">
+                Rate and review the albums you love.
+              </h1>
+              <p className="text-[var(--muted)]">
+                Log listens, write reviews, and build your personal canon.
+              </p>
+            </div>
+            <div className="border border-[color:var(--border)] p-4 text-sm text-[var(--muted)]">
+              <p className="font-mono text-xs uppercase tracking-[0.3em] text-[var(--muted-strong)]">
+                New
+              </p>
+              <p className="mt-2">
+                Search any Spotify album without signing in. Log in to rate and
+                review.
+              </p>
+            </div>
           </div>
         </header>
 
-        <form onSubmit={handleSearch} className="flex flex-col gap-3 md:flex-row">
+        <form
+          onSubmit={handleSearch}
+          className="flex flex-col gap-3 border-b border-[color:var(--border)] pb-6 md:flex-row"
+        >
           <input
-            className="flex-1 rounded-full border border-zinc-800 bg-zinc-950 px-5 py-3 text-sm text-zinc-100 outline-none transition focus:border-emerald-400"
+            className="flex-1 rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-5 py-3 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] placeholder:text-[var(--muted)]"
             placeholder="Search for an album or artist"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
           <button
             type="submit"
-            className="rounded-full bg-zinc-100 px-6 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+            className="rounded-none bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-strong)] disabled:text-[var(--muted)]"
             disabled={!canSearch || loadingSearch}
           >
             {loadingSearch ? "Searching..." : "Search"}
@@ -196,70 +236,79 @@ export default function Home() {
         </form>
 
         {error && (
-          <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
             {error}
           </div>
         )}
 
         <div className="grid gap-6 md:grid-cols-[1.2fr_1fr]">
           <section className="space-y-4">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
               Results
             </h2>
             {results.length === 0 && (
-              <p className="text-sm text-zinc-500">
+              <p className="text-sm text-[var(--muted)]">
                 Start by searching for an album.
               </p>
             )}
-            <div className="space-y-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {results.map((album) => (
-                <button
-                  key={album.id}
-                  className="flex w-full items-center gap-4 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 text-left transition hover:border-emerald-400"
-                  onClick={() => handleSelect(album.id)}
-                  type="button"
-                >
-                  <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl bg-zinc-800">
-                    {album.image ? (
-                      <img
-                        src={album.image}
-                        alt={`${album.name} cover`}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : null}
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-zinc-100">
-                      {album.name}
-                    </p>
-                    <p className="text-xs text-zinc-400">
-                      {album.artists.join(", ")}
-                    </p>
-                    <p className="text-xs text-zinc-500">
-                      {album.release_date} • {album.total_tracks} tracks
-                    </p>
-                  </div>
-                </button>
+                <div key={album.id} className="group">
+                  <button
+                    className="flex w-full flex-col items-start gap-3 text-left"
+                    onClick={() => handleSelect(album.id)}
+                    type="button"
+                  >
+                    <div className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[150%]">
+                      {album.image ? (
+                        <img
+                          src={album.image}
+                          alt={`${album.name} cover`}
+                          className="absolute inset-0 h-full w-full object-cover"
+                        />
+                      ) : null}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        {album.name}
+                      </p>
+                      <p className="text-xs text-[var(--muted)]">
+                        {album.artists.join(", ")}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-[var(--muted-strong)]">
+                        <span>
+                          {album.release_date} • {album.total_tracks} tracks
+                        </span>
+                        <Link
+                          className="text-[var(--accent-strong)] hover:text-[var(--accent)]"
+                          href={`/albums/${album.id}`}
+                        >
+                          Open
+                        </Link>
+                      </div>
+                    </div>
+                  </button>
+                </div>
               ))}
             </div>
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">
               Album Details
             </h2>
             {loadingAlbum && (
-              <p className="text-sm text-zinc-500">Loading details...</p>
+              <p className="text-sm text-[var(--muted)]">Loading details...</p>
             )}
             {!loadingAlbum && !selected && (
-              <p className="text-sm text-zinc-500">
+              <p className="text-sm text-[var(--muted)]">
                 Select an album to see track details.
               </p>
             )}
             {selected && (
-              <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-5">
+              <div className="space-y-4 border border-[color:var(--border)] p-5">
                 <div className="flex items-start gap-4">
-                  <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl bg-zinc-800">
+                  <div className="h-24 w-24 flex-shrink-0 overflow-hidden border border-[color:var(--border)] bg-[#0b0d12]">
                     {selected.images?.[0]?.url ? (
                       <img
                         src={selected.images[0].url}
@@ -269,22 +318,22 @@ export default function Home() {
                     ) : null}
                   </div>
                   <div>
-                    <p className="text-lg font-semibold text-zinc-50">
+                    <p className="text-lg font-semibold text-[var(--foreground)]">
                       {selected.name}
                     </p>
-                    <p className="text-sm text-zinc-400">
+                    <p className="text-sm text-[var(--muted)]">
                       {selected.artists.join(", ")}
                     </p>
-                    <p className="text-xs text-zinc-500">
+                    <p className="text-xs text-[var(--muted)]">
                       {selected.release_date} • {selected.total_tracks} tracks
                     </p>
                     {selected.label && (
-                      <p className="text-xs text-zinc-500">
+                      <p className="text-xs text-[var(--muted)]">
                         Label: {selected.label}
                       </p>
                     )}
                     {selected.genres?.length > 0 && (
-                      <p className="text-xs text-zinc-500">
+                      <p className="text-xs text-[var(--muted)]">
                         Genres: {selected.genres.join(", ")}
                       </p>
                     )}
@@ -294,14 +343,14 @@ export default function Home() {
                   {selected.tracks.map((track) => (
                     <div
                       key={track.id}
-                      className="flex items-center justify-between text-xs text-zinc-400"
+                      className="flex items-center justify-between border-b border-[color:var(--border)] py-2 text-xs text-[var(--muted)]"
                     >
                       <span>
                         {track.track_number}. {track.name}
                       </span>
                       {track.preview_url ? (
                         <a
-                          className="text-emerald-400 hover:text-emerald-300"
+                          className="text-[var(--accent-strong)] hover:text-[var(--accent)]"
                           href={track.preview_url}
                           target="_blank"
                           rel="noreferrer"

@@ -50,6 +50,40 @@ async function exchangeCodeForToken(code) {
   };
 }
 
+let appAccessToken = null;
+let appAccessTokenExpiresAt = 0;
+
+async function getAppAccessToken() {
+  const now = Date.now();
+  if (appAccessToken && now < appAccessTokenExpiresAt - 60_000) {
+    return appAccessToken;
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+  });
+
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const response = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Spotify client token failed: ${response.status} ${details}`);
+  }
+
+  const data = await response.json();
+  appAccessToken = data.access_token;
+  appAccessTokenExpiresAt = now + data.expires_in * 1000;
+  return appAccessToken;
+}
+
 async function refreshAccessToken(refreshToken) {
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -112,6 +146,7 @@ async function fetchSpotifyJson(accessToken, url) {
 module.exports = {
   getAuthorizeUrl,
   exchangeCodeForToken,
+  getAppAccessToken,
   refreshAccessToken,
   fetchSpotifyProfile,
   fetchSpotifyJson,
