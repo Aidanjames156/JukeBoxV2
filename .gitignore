@@ -1,0 +1,29 @@
+# Node
+**/node_modules
+**/npm-debug.log*
+**/yarn-error.log*
+
+# Env
+**/.env
+**/.env.*
+
+# Next.js
+**/.next
+**/out
+
+# Build output
+**/dist
+**/build
+**/coverage
+
+# Logs
+**/logs
+**/*.log
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+
+.md
