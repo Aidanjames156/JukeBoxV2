@@ -102,6 +102,10 @@ function setCached(map, key, value, ttlMs) {
   map.set(key, { value, expiresAt: Date.now() + ttlMs });
 }
 
+function isValidSpotifyId(value) {
+  return /^[A-Za-z0-9]{22}$/.test(value);
+}
+
 async function getUserRefreshToken(userId) {
   const result = await pool.query(
     'SELECT refresh_token FROM users WHERE id = $1',
@@ -138,9 +142,7 @@ async function getAccessContext(req) {
       const accessToken = await getAccessTokenForUser(session.sub);
       return { accessToken, cacheKey: `user:${session.sub}` };
     } catch (err) {
-      if (err.code !== 'missing_refresh_token') {
-        throw err;
-      }
+      console.warn('Falling back to app token for Spotify access.', err?.message);
     }
   }
 
@@ -279,6 +281,75 @@ app.get('/spotify/search', rateLimit, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'spotify_search_failed' });
+  }
+});
+
+app.get('/spotify/albums', rateLimit, async (req, res) => {
+  const idsRaw = Array.isArray(req.query.ids)
+    ? req.query.ids.join(',')
+    : req.query.ids;
+
+  if (!idsRaw || typeof idsRaw !== 'string') {
+    return res.status(400).json({ error: 'ids_required' });
+  }
+
+  const ids = idsRaw
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => isValidSpotifyId(id));
+
+  if (ids.length === 0) {
+    return res.status(400).json({ error: 'ids_invalid' });
+  }
+
+  if (ids.length > 20) {
+    return res.status(400).json({ error: 'too_many_ids' });
+  }
+
+  try {
+    const { accessToken, cacheKey } = await getAccessContext(req);
+    const cacheIds = ids.map((id) => ({
+      id,
+      cached: getCached(albumCache, `${cacheKey}:album:${id}`),
+    }));
+
+    const cachedAlbums = cacheIds
+      .filter((entry) => entry.cached)
+      .map((entry) => entry.cached.album);
+
+    const missingIds = cacheIds
+      .filter((entry) => !entry.cached)
+      .map((entry) => entry.id);
+
+    let fetchedAlbums = [];
+    if (missingIds.length > 0) {
+      const url = new URL('https://api.spotify.com/v1/albums');
+      url.searchParams.set('ids', missingIds.join(','));
+      const data = await fetchSpotifyJson(accessToken, url.toString());
+      fetchedAlbums = (data.albums || [])
+        .filter(Boolean)
+        .map((album) => ({
+          id: album.id,
+          name: album.name,
+          artists: album.artists?.map((artist) => artist.name) || [],
+          images: album.images || [],
+          release_date: album.release_date,
+          total_tracks: album.total_tracks,
+          label: album.label,
+          genres: album.genres || [],
+        }));
+    }
+
+    const allAlbums = [...cachedAlbums, ...fetchedAlbums];
+    fetchedAlbums.forEach((album) => {
+      const payload = { album };
+      setCached(albumCache, `${cacheKey}:album:${album.id}`, payload, albumCacheTtlMs);
+    });
+
+    return res.json({ albums: allAlbums });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'spotify_album_failed' });
   }
 });
 
@@ -444,6 +515,193 @@ app.get('/me/reviews', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'reviews_fetch_failed' });
+  }
+});
+
+app.get('/me/lists', requireAuth, async (req, res) => {
+  try {
+    const listResult = await pool.query(
+      `SELECT id, title, description, created_at
+       FROM lists
+       WHERE user_id = $1
+       ORDER BY created_at DESC`,
+      [req.user.sub]
+    );
+
+    const lists = listResult.rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      created_at: row.created_at,
+      items: [],
+    }));
+
+    if (lists.length === 0) {
+      return res.json({ lists: [] });
+    }
+
+    const listIds = lists.map((list) => list.id);
+    const itemResult = await pool.query(
+      `SELECT list_id, spotify_album_id, created_at
+       FROM list_items
+       WHERE list_id = ANY($1)
+       ORDER BY created_at DESC`,
+      [listIds]
+    );
+
+    const listMap = new Map(lists.map((list) => [list.id, list]));
+    itemResult.rows.forEach((row) => {
+      const list = listMap.get(row.list_id);
+      if (list) {
+        list.items.push({
+          spotify_album_id: row.spotify_album_id,
+          created_at: row.created_at,
+        });
+      }
+    });
+
+    return res.json({ lists });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'lists_fetch_failed' });
+  }
+});
+
+app.post('/me/lists', requireAuth, async (req, res) => {
+  const titleRaw = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+  const descriptionRaw =
+    typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+  const description = descriptionRaw.length > 0 ? descriptionRaw : null;
+
+  if (!titleRaw) {
+    return res.status(400).json({ error: 'title_required' });
+  }
+
+  if (titleRaw.length > 120) {
+    return res.status(400).json({ error: 'title_too_long' });
+  }
+
+  if (description && description.length > 500) {
+    return res.status(400).json({ error: 'description_too_long' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO lists (user_id, title, description)
+       VALUES ($1, $2, $3)
+       RETURNING id, title, description, created_at`,
+      [req.user.sub, titleRaw, description]
+    );
+
+    return res.status(201).json({ list: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'list_create_failed' });
+  }
+});
+
+app.post('/lists/:id/items', requireAuth, async (req, res) => {
+  const listId = parseInt(req.params.id, 10);
+  const albumRaw =
+    typeof req.body?.spotify_album_id === 'string'
+      ? req.body.spotify_album_id.trim()
+      : '';
+
+  if (!listId) {
+    return res.status(400).json({ error: 'list_id_required' });
+  }
+
+  if (!albumRaw) {
+    return res.status(400).json({ error: 'album_id_required' });
+  }
+
+  if (!isValidSpotifyId(albumRaw)) {
+    return res.status(400).json({ error: 'invalid_album_id' });
+  }
+
+  try {
+    const listResult = await pool.query(
+      'SELECT id FROM lists WHERE id = $1 AND user_id = $2',
+      [listId, req.user.sub]
+    );
+
+    if (listResult.rows.length === 0) {
+      return res.status(404).json({ error: 'list_not_found' });
+    }
+
+    const appToken = await getAppAccessToken();
+    const validationResponse = await fetch(
+      `https://api.spotify.com/v1/albums/${albumRaw}`,
+      { headers: { Authorization: `Bearer ${appToken}` } }
+    );
+
+    if (validationResponse.status === 400 || validationResponse.status === 404) {
+      return res.status(400).json({ error: 'invalid_album_id' });
+    }
+
+    if (!validationResponse.ok) {
+      const details = await validationResponse.text();
+      console.error('Spotify album validation failed:', details);
+      return res.status(503).json({ error: 'spotify_unavailable' });
+    }
+
+    await pool.query(
+      `INSERT INTO list_items (list_id, spotify_album_id)
+       VALUES ($1, $2)
+       ON CONFLICT (list_id, spotify_album_id) DO NOTHING`,
+      [listId, albumRaw]
+    );
+
+    return res.status(201).json({
+      item: {
+        list_id: listId,
+        spotify_album_id: albumRaw,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'list_item_create_failed' });
+  }
+});
+
+app.get('/lists/:id', requireAuth, async (req, res) => {
+  const listId = parseInt(req.params.id, 10);
+
+  if (!listId) {
+    return res.status(400).json({ error: 'list_id_required' });
+  }
+
+  try {
+    const listResult = await pool.query(
+      `SELECT id, title, description, created_at
+       FROM lists
+       WHERE id = $1 AND user_id = $2`,
+      [listId, req.user.sub]
+    );
+
+    if (listResult.rows.length === 0) {
+      return res.status(404).json({ error: 'list_not_found' });
+    }
+
+    const list = listResult.rows[0];
+
+    const itemResult = await pool.query(
+      `SELECT spotify_album_id, created_at
+       FROM list_items
+       WHERE list_id = $1
+       ORDER BY created_at DESC`,
+      [listId]
+    );
+
+    list.items = itemResult.rows.map((row) => ({
+      spotify_album_id: row.spotify_album_id,
+      created_at: row.created_at,
+    }));
+
+    return res.json({ list });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'list_fetch_failed' });
   }
 });
 

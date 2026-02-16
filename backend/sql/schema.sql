@@ -14,3 +14,19 @@ CREATE TABLE IF NOT EXISTS reviews (
   body TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS lists (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS list_items (
+  id SERIAL PRIMARY KEY,
+  list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+  spotify_album_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (list_id, spotify_album_id)
+);

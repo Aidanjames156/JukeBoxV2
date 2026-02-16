@@ -18,6 +18,19 @@ type Review = {
   created_at: string;
 };
 
+type ListItem = {
+  spotify_album_id: string;
+  created_at: string;
+};
+
+type List = {
+  id: number;
+  title: string;
+  description: string | null;
+  created_at: string;
+  items: ListItem[];
+};
+
 type AlbumCard = {
   id: string;
   name: string;
@@ -33,6 +46,9 @@ export default function ProfilePage() {
   const [albumMap, setAlbumMap] = useState<Record<string, AlbumCard>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lists, setLists] = useState<List[]>([]);
+  const [listsLoading, setListsLoading] = useState(true);
+  const [listsError, setListsError] = useState<string | null>(null);
 
   const averageRating = useMemo(() => {
     if (reviews.length === 0) {
@@ -112,23 +128,71 @@ export default function ProfilePage() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadAlbums() {
-      if (reviews.length === 0) {
-        return;
-      }
+    async function loadLists() {
+      setListsLoading(true);
+      setListsError(null);
 
-      const uniqueIds = Array.from(
-        new Set(reviews.map((review) => review.spotify_album_id))
-      ).filter((id) => !albumMap[id]);
+      try {
+        const response = await fetch(`${apiUrl}/me/lists`, {
+          credentials: "include",
+        });
+
+        if (response.status === 401) {
+          if (!cancelled) {
+            setLists([]);
+          }
+          return;
+        }
+
+        const data = await response.json();
+        if (!cancelled) {
+          setLists(Array.isArray(data.lists) ? data.lists : []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setListsError("Could not load lists.");
+        }
+      } finally {
+        if (!cancelled) {
+          setListsLoading(false);
+        }
+      }
+    }
+
+    loadLists();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAlbums() {
+      const reviewIds = reviews.map((review) => review.spotify_album_id);
+      const listIds = lists.flatMap((list) =>
+        list.items.map((item) => item.spotify_album_id)
+      );
+
+      const validIds = Array.from(new Set([...reviewIds, ...listIds])).filter(
+        (id) => /^[A-Za-z0-9]{22}$/.test(id)
+      );
+
+      const uniqueIds = validIds.filter((id) => !albumMap[id]);
 
       if (uniqueIds.length === 0) {
         return;
       }
 
       try {
+        const chunks: string[][] = [];
+        for (let i = 0; i < uniqueIds.length; i += 20) {
+          chunks.push(uniqueIds.slice(i, i + 20));
+        }
+
         const responses = await Promise.all(
-          uniqueIds.map((id) =>
-            fetch(`${apiUrl}/spotify/albums/${id}`, {
+          chunks.map((chunk) =>
+            fetch(`${apiUrl}/spotify/albums?ids=${chunk.join(",")}`, {
               credentials: "include",
             })
           )
@@ -137,17 +201,17 @@ export default function ProfilePage() {
         const albums = await Promise.all(
           responses.map(async (response) => {
             if (!response.ok) {
-              return null;
+              return [];
             }
             const data = await response.json();
-            return data.album || null;
+            return Array.isArray(data.albums) ? data.albums : [];
           })
         );
 
         if (!cancelled) {
           setAlbumMap((prev) => {
             const next = { ...prev };
-            albums.forEach((album) => {
+            albums.flat().forEach((album) => {
               if (!album) {
                 return;
               }
@@ -170,7 +234,7 @@ export default function ProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [apiUrl, reviews, albumMap]);
+  }, [apiUrl, reviews, lists, albumMap]);
 
   function formatDate(value: string) {
     const date = new Date(value);
@@ -179,6 +243,8 @@ export default function ProfilePage() {
     }
     return date.toLocaleDateString();
   }
+
+  // list creation and item addition moved to dedicated list pages
 
   return (
     <div className="min-h-screen text-[color:var(--foreground)]">
@@ -268,8 +334,103 @@ export default function ProfilePage() {
 
         {user && (
           <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold text-[var(--foreground)]">
+                Lists
+              </h2>
+              <div className="flex items-center gap-3">
+                <span className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
+                  Curate your albums
+                </span>
+                <Link
+                  href="/lists/new"
+                  className="rounded-none border border-[color:var(--border)] px-3 py-2 text-xs text-[var(--foreground)] transition hover:border-[var(--accent)]"
+                >
+                  Create list
+                </Link>
+              </div>
+            </div>
+
+            {listsLoading && (
+              <div className="border border-[color:var(--border)] p-6 text-sm text-[var(--muted)]">
+                Loading lists...
+              </div>
+            )}
+
+            {listsError && (
+              <div className="border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+                {listsError}
+              </div>
+            )}
+
+            {!listsLoading && lists.length === 0 && (
+              <div className="border border-[color:var(--border)] p-6 text-sm text-[var(--muted)]">
+                No lists yet. Create one to start collecting albums.
+              </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-2">
+              {lists.map((list) => (
+                <Link
+                  key={list.id}
+                  href={`/lists/${list.id}`}
+                  className="border border-[color:var(--border)] p-5 transition hover:border-[var(--accent)]"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        {list.title}
+                      </p>
+                      {list.description && (
+                        <p className="text-xs text-[var(--muted)]">
+                          {list.description}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-xs text-[var(--muted)]">
+                      {list.items.length} album
+                      {list.items.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-4 gap-2">
+                    {list.items.length === 0 && (
+                      <p className="col-span-full text-xs text-[var(--muted)]">
+                        No albums yet.
+                      </p>
+                    )}
+                    {list.items.slice(0, 4).map((item) => {
+                      const album = albumMap[item.spotify_album_id];
+                      return (
+                        <div
+                          key={item.spotify_album_id}
+                          className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[150%]"
+                        >
+                          {album?.image ? (
+                            <img
+                              src={album.image}
+                              alt={`${album.name} cover`}
+                              className="absolute inset-0 h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-[10px] uppercase tracking-[0.3em] text-[var(--muted-strong)]">
+                              No art
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {user && (
+          <section className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-zinc-50">
+              <h2 className="text-lg font-semibold text-[var(--foreground)]">
                 Recent reviews
               </h2>
               <span className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
