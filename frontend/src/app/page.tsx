@@ -259,7 +259,7 @@ export default function Home() {
                     onClick={() => handleSelect(album.id)}
                     type="button"
                   >
-                    <div className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[150%]">
+                    <div className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[100%]">
                       {album.image ? (
                         <img
                           src={album.image}

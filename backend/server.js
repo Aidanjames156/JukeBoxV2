@@ -542,10 +542,10 @@ app.get('/me/lists', requireAuth, async (req, res) => {
 
     const listIds = lists.map((list) => list.id);
     const itemResult = await pool.query(
-      `SELECT list_id, spotify_album_id, created_at
+      `SELECT list_id, spotify_album_id, created_at, position
        FROM list_items
        WHERE list_id = ANY($1)
-       ORDER BY created_at DESC`,
+       ORDER BY position DESC, created_at DESC`,
       [listIds]
     );
 
@@ -556,6 +556,7 @@ app.get('/me/lists', requireAuth, async (req, res) => {
         list.items.push({
           spotify_album_id: row.spotify_album_id,
           created_at: row.created_at,
+          position: row.position,
         });
       }
     });
@@ -645,22 +646,108 @@ app.post('/lists/:id/items', requireAuth, async (req, res) => {
       return res.status(503).json({ error: 'spotify_unavailable' });
     }
 
+    const positionResult = await pool.query(
+      'SELECT COALESCE(MAX(position), 0) AS max_position FROM list_items WHERE list_id = $1',
+      [listId]
+    );
+    const nextPosition = Number(positionResult.rows[0]?.max_position || 0) + 1;
+
     await pool.query(
-      `INSERT INTO list_items (list_id, spotify_album_id)
-       VALUES ($1, $2)
+      `INSERT INTO list_items (list_id, spotify_album_id, position)
+       VALUES ($1, $2, $3)
        ON CONFLICT (list_id, spotify_album_id) DO NOTHING`,
-      [listId, albumRaw]
+      [listId, albumRaw, nextPosition]
     );
 
     return res.status(201).json({
       item: {
         list_id: listId,
         spotify_album_id: albumRaw,
+        position: nextPosition,
       },
     });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'list_item_create_failed' });
+  }
+});
+
+app.post('/lists/:id/reorder', requireAuth, async (req, res) => {
+  const listId = parseInt(req.params.id, 10);
+  const orderRaw = Array.isArray(req.body?.order) ? req.body.order : [];
+  const order = orderRaw
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  if (!listId) {
+    return res.status(400).json({ error: 'list_id_required' });
+  }
+
+  if (order.length === 0) {
+    return res.status(400).json({ error: 'order_required' });
+  }
+
+  if (order.some((id) => !isValidSpotifyId(id))) {
+    return res.status(400).json({ error: 'invalid_album_id' });
+  }
+
+  if (new Set(order).size !== order.length) {
+    return res.status(400).json({ error: 'order_duplicate' });
+  }
+
+  try {
+    const listResult = await pool.query(
+      'SELECT id FROM lists WHERE id = $1 AND user_id = $2',
+      [listId, req.user.sub]
+    );
+
+    if (listResult.rows.length === 0) {
+      return res.status(404).json({ error: 'list_not_found' });
+    }
+
+    const itemResult = await pool.query(
+      'SELECT spotify_album_id FROM list_items WHERE list_id = $1',
+      [listId]
+    );
+    const existingIds = itemResult.rows.map((row) => row.spotify_album_id);
+
+    if (existingIds.length !== order.length) {
+      return res.status(400).json({ error: 'order_mismatch' });
+    }
+
+    const existingSet = new Set(existingIds);
+    const missing = order.some((id) => !existingSet.has(id));
+    if (missing) {
+      return res.status(400).json({ error: 'order_mismatch' });
+    }
+
+    const total = order.length;
+    const values = [listId];
+    const cases = [];
+
+    order.forEach((albumId, index) => {
+      const idParam = values.length + 1;
+      values.push(albumId);
+      const positionParam = values.length + 1;
+      values.push(total - index);
+      cases.push(`WHEN $${idParam} THEN $${positionParam}`);
+    });
+
+    const updateQuery = `
+      UPDATE list_items
+      SET position = CASE spotify_album_id
+        ${cases.join(' ')}
+        ELSE position
+      END
+      WHERE list_id = $1
+    `;
+
+    await pool.query(updateQuery, values);
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'list_reorder_failed' });
   }
 });
 
@@ -686,16 +773,17 @@ app.get('/lists/:id', requireAuth, async (req, res) => {
     const list = listResult.rows[0];
 
     const itemResult = await pool.query(
-      `SELECT spotify_album_id, created_at
+      `SELECT spotify_album_id, created_at, position
        FROM list_items
        WHERE list_id = $1
-       ORDER BY created_at DESC`,
+       ORDER BY position DESC, created_at DESC`,
       [listId]
     );
 
     list.items = itemResult.rows.map((row) => ({
       spotify_album_id: row.spotify_album_id,
       created_at: row.created_at,
+      position: row.position,
     }));
 
     return res.json({ list });

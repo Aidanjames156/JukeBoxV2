@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS list_items (
   id SERIAL PRIMARY KEY,
   list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
   spotify_album_id TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (list_id, spotify_album_id)
 );

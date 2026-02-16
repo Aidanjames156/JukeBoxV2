@@ -21,6 +21,7 @@ type Review = {
 type ListItem = {
   spotify_album_id: string;
   created_at: string;
+  position?: number;
 };
 
 type List = {
@@ -404,7 +405,7 @@ export default function ProfilePage() {
                       return (
                         <div
                           key={item.spotify_album_id}
-                          className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[150%]"
+                          className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[100%]"
                         >
                           {album?.image ? (
                             <img
@@ -458,7 +459,7 @@ export default function ProfilePage() {
                     key={review.id}
                     className="flex flex-col gap-4 border border-[color:var(--border)] p-5 md:flex-row md:items-start"
                   >
-                    <div className="relative h-32 w-24 flex-shrink-0 overflow-hidden border border-[color:var(--border)] bg-[#0b0d12]">
+                    <div className="relative h-28 w-28 flex-shrink-0 overflow-hidden border border-[color:var(--border)] bg-[#0b0d12]">
                       {album?.image ? (
                         <img
                           src={album.image}

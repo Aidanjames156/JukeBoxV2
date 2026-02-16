@@ -14,6 +14,7 @@ type User = {
 type ListItem = {
   spotify_album_id: string;
   created_at: string;
+  position?: number;
 };
 
 type ListDetail = {
@@ -57,6 +58,10 @@ export default function ListPage() {
   const [searching, setSearching] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [reorderSaving, setReorderSaving] = useState(false);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const suggestionOpen = useMemo(
     () => query.trim().length > 1 && suggestions.length > 0,
@@ -305,10 +310,15 @@ export default function ListPage() {
         if (exists) {
           return prev;
         }
+        const topPosition = prev.items[0]?.position ?? 0;
         return {
           ...prev,
           items: [
-            { spotify_album_id: albumId, created_at: new Date().toISOString() },
+            {
+              spotify_album_id: albumId,
+              created_at: new Date().toISOString(),
+              position: topPosition + 1,
+            },
             ...prev.items,
           ],
         };
@@ -335,6 +345,125 @@ export default function ListPage() {
     }
 
     await addAlbumToList(albumId);
+  }
+
+  function buildOrderedItems(
+    items: ListItem[],
+    sourceId: string,
+    targetId: string
+  ) {
+    const currentIndex = items.findIndex(
+      (item) => item.spotify_album_id === sourceId
+    );
+    const targetIndex = items.findIndex(
+      (item) => item.spotify_album_id === targetId
+    );
+
+    if (
+      currentIndex < 0 ||
+      targetIndex < 0 ||
+      currentIndex === targetIndex
+    ) {
+      return null;
+    }
+
+    const nextItems = [...items];
+    const [moved] = nextItems.splice(currentIndex, 1);
+    nextItems.splice(targetIndex, 0, moved);
+
+    return nextItems.map((item, index) => ({
+      ...item,
+      position: nextItems.length - index,
+    }));
+  }
+
+  async function persistOrder(
+    orderedItems: ListItem[],
+    previousItems: ListItem[]
+  ) {
+    if (!listId) {
+      return;
+    }
+
+    setReorderSaving(true);
+    setReorderError(null);
+    try {
+      const response = await fetch(`${apiUrl}/lists/${listId}/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          order: orderedItems.map((item) => item.spotify_album_id),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("reorder_failed");
+      }
+    } catch (err) {
+      setReorderError("Could not save the new order.");
+      setList((prev) => (prev ? { ...prev, items: previousItems } : prev));
+    } finally {
+      setReorderSaving(false);
+    }
+  }
+
+  function handleDragStart(
+    event: React.DragEvent<HTMLDivElement>,
+    itemId: string
+  ) {
+    if (reorderSaving) {
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", itemId);
+    setDraggingId(itemId);
+  }
+
+  function handleDragOver(
+    event: React.DragEvent<HTMLDivElement>,
+    itemId: string
+  ) {
+    if (reorderSaving) {
+      return;
+    }
+    event.preventDefault();
+    if (dragOverId !== itemId) {
+      setDragOverId(itemId);
+    }
+  }
+
+  async function handleDrop(
+    event: React.DragEvent<HTMLDivElement>,
+    targetId: string
+  ) {
+    event.preventDefault();
+    if (!list || reorderSaving) {
+      return;
+    }
+
+    const sourceId =
+      draggingId || event.dataTransfer.getData("text/plain") || "";
+    setDraggingId(null);
+    setDragOverId(null);
+
+    if (!sourceId || sourceId === targetId) {
+      return;
+    }
+
+    const previousItems = list.items;
+    const orderedItems = buildOrderedItems(previousItems, sourceId, targetId);
+    if (!orderedItems) {
+      return;
+    }
+
+    setList((prev) => (prev ? { ...prev, items: orderedItems } : prev));
+    await persistOrder(orderedItems, previousItems);
+  }
+
+  function handleDragEnd() {
+    setDraggingId(null);
+    setDragOverId(null);
   }
 
   return (
@@ -435,21 +564,26 @@ export default function ListPage() {
                   Keep typing or paste a Spotify album URL.
                 </div>
               )}
-              {addError && (
-                <div className="mt-3 border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200">
-                  {addError}
-                </div>
-              )}
-              <button
-                type="submit"
-                className="mt-4 rounded-none bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-strong)] disabled:text-[var(--muted)]"
-                disabled={adding}
-              >
+            {addError && (
+              <div className="mt-3 border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200">
+                {addError}
+              </div>
+            )}
+            {reorderError && (
+              <div className="mt-3 border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200">
+                {reorderError}
+              </div>
+            )}
+            <button
+              type="submit"
+              className="mt-4 rounded-none bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-strong)] disabled:text-[var(--muted)]"
+              disabled={adding}
+            >
                 {adding ? "Adding..." : "Add album"}
               </button>
             </form>
 
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="space-y-4">
               {list.items.length === 0 && (
                 <div className="border border-[color:var(--border)] p-6 text-sm text-[var(--muted)]">
                   No albums yet. Start typing to add one.
@@ -457,9 +591,27 @@ export default function ListPage() {
               )}
               {list.items.map((item) => {
                 const album = albumMap[item.spotify_album_id];
+                const isDragging = draggingId === item.spotify_album_id;
+                const isDragOver = dragOverId === item.spotify_album_id;
                 return (
-                  <div key={item.spotify_album_id} className="space-y-2">
-                    <div className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[color:var(--surface-strong)] pb-[150%]">
+                  <div
+                    key={item.spotify_album_id}
+                    className={`group flex flex-col gap-4 border border-[color:var(--border)] p-4 transition md:flex-row md:items-center ${
+                      isDragOver ? "border-[var(--accent)] bg-[color:var(--surface-strong)]" : ""
+                    } ${isDragging ? "opacity-70" : ""}`}
+                    draggable={!reorderSaving}
+                    onDragStart={(event) =>
+                      handleDragStart(event, item.spotify_album_id)
+                    }
+                    onDragOver={(event) =>
+                      handleDragOver(event, item.spotify_album_id)
+                    }
+                    onDrop={(event) =>
+                      handleDrop(event, item.spotify_album_id)
+                    }
+                    onDragEnd={handleDragEnd}
+                  >
+                    <div className="relative h-28 w-28 flex-shrink-0 overflow-hidden border border-[color:var(--border)] bg-[color:var(--surface-strong)]">
                       {album?.image ? (
                         <img
                           src={album.image}
@@ -472,13 +624,26 @@ export default function ListPage() {
                         </div>
                       )}
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-sm font-semibold text-[var(--foreground)]">
                         {album?.name || "Unknown album"}
                       </p>
                       <p className="text-xs text-[var(--muted)]">
                         {album?.artists?.join(", ") || item.spotify_album_id}
                       </p>
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-[var(--muted)] opacity-0 transition group-hover:opacity-100">
+                      <span
+                        className="cursor-grab border border-[color:var(--border)] px-2 py-1 transition group-active:cursor-grabbing"
+                        aria-hidden="true"
+                      >
+                        Drag
+                      </span>
+                      {reorderSaving && (
+                        <span className="text-[var(--muted-strong)]">
+                          Saving...
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
