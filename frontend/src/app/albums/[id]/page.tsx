@@ -298,7 +298,7 @@ export default function AlbumPage() {
         {!loading && !error && album && (
           <section className="grid gap-6 border border-[color:var(--border)] p-8 md:grid-cols-[240px_1fr]">
             <div className="space-y-4">
-              <div className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[150%]">
+              <div className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[100%]">
                 {album.images?.[0]?.url ? (
                   <img
                     src={album.images[0].url}

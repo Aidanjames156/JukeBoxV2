@@ -23,6 +23,9 @@ README.md
 **/logs
 **/*.log
 
+# Uploads
+**/uploads
+
 # OS/Editor
 .DS_Store
 Thumbs.db

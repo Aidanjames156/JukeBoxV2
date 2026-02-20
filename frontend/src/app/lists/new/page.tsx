@@ -17,6 +17,7 @@ export default function NewListPage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [isRanked, setIsRanked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -65,6 +66,7 @@ export default function NewListPage() {
         body: JSON.stringify({
           title: title.trim(),
           description: description.trim() || null,
+          is_ranked: isRanked,
         }),
       });
 
@@ -164,6 +166,15 @@ export default function NewListPage() {
                 onChange={(event) => setDescription(event.target.value)}
               />
             </div>
+            <label className="flex items-center gap-3 border border-[color:var(--border)] px-4 py-3 text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[var(--accent)]"
+                checked={isRanked}
+                onChange={(event) => setIsRanked(event.target.checked)}
+              />
+              Ranked list
+            </label>
 
             {error && (
               <div className="border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">

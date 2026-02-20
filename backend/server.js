@@ -1,9 +1,12 @@
 require('dotenv').config();
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const multer = require('multer');
 const { pool } = require('./db');
 const {
   cookieOptions,
@@ -60,6 +63,33 @@ app.use(
 );
 app.use(express.json());
 app.use(cookieParser());
+
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: uploadsDir,
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      const allowedExts = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+      const safeExt = allowedExts.has(ext) ? ext : '';
+      cb(null, `${crypto.randomBytes(16).toString('hex')}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype && file.mimetype.startsWith('image/')) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('invalid_file_type'));
+  },
+});
+
+app.use('/uploads', express.static(uploadsDir));
 
 function rateLimit(req, res, next) {
   const now = Date.now();
@@ -204,7 +234,8 @@ app.get('/auth/spotify/callback', async (req, res) => {
       `INSERT INTO users (spotify_id, display_name, refresh_token)
        VALUES ($1, $2, $3)
        ON CONFLICT (spotify_id)
-       DO UPDATE SET display_name = EXCLUDED.display_name, refresh_token = EXCLUDED.refresh_token
+       DO UPDATE SET display_name = COALESCE(users.display_name, EXCLUDED.display_name),
+                     refresh_token = EXCLUDED.refresh_token
        RETURNING id, spotify_id, display_name`,
       [profile.id, profile.display_name || null, refreshToken]
     );
@@ -239,6 +270,141 @@ app.get('/auth/me', async (req, res) => {
 app.post('/auth/logout', (req, res) => {
   clearSession(res);
   res.json({ status: 'ok' });
+});
+
+app.get('/me/profile', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, spotify_id, display_name, avatar_url, bio,
+              favorite_genres, favorite_album_ids
+       FROM users
+       WHERE id = $1`,
+      [req.user.sub]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'profile_not_found' });
+    }
+
+    return res.json({ profile: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'profile_fetch_failed' });
+  }
+});
+
+app.patch('/me/profile', requireAuth, async (req, res) => {
+  const updates = [];
+  const values = [];
+
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'display_name')) {
+    const displayNameRaw =
+      typeof req.body.display_name === 'string' ? req.body.display_name.trim() : '';
+    const displayName = displayNameRaw.length > 0 ? displayNameRaw : null;
+    if (displayName && displayName.length > 80) {
+      return res.status(400).json({ error: 'display_name_too_long' });
+    }
+    updates.push(`display_name = $${values.length + 1}`);
+    values.push(displayName);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'bio')) {
+    const bioRaw = typeof req.body.bio === 'string' ? req.body.bio.trim() : '';
+    const bio = bioRaw.length > 0 ? bioRaw : null;
+    if (bio && bio.length > 500) {
+      return res.status(400).json({ error: 'bio_too_long' });
+    }
+    updates.push(`bio = $${values.length + 1}`);
+    values.push(bio);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'favorite_genres')) {
+    const genresRaw = Array.isArray(req.body.favorite_genres)
+      ? req.body.favorite_genres
+      : [];
+    const genres = genresRaw
+      .filter((genre) => typeof genre === 'string')
+      .map((genre) => genre.trim())
+      .filter((genre) => genre.length > 0);
+    const uniqueGenres = Array.from(new Set(genres));
+    if (uniqueGenres.length > 10) {
+      return res.status(400).json({ error: 'favorite_genres_too_many' });
+    }
+    if (uniqueGenres.some((genre) => genre.length > 30)) {
+      return res.status(400).json({ error: 'favorite_genre_too_long' });
+    }
+    updates.push(`favorite_genres = $${values.length + 1}`);
+    values.push(uniqueGenres);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'favorite_album_ids')) {
+    if (!Array.isArray(req.body.favorite_album_ids)) {
+      return res.status(400).json({ error: 'favorite_album_ids_invalid' });
+    }
+    const albumIds = req.body.favorite_album_ids
+      .filter((value) => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+
+    if (albumIds.length > 3) {
+      return res.status(400).json({ error: 'favorite_album_ids_too_many' });
+    }
+
+    if (albumIds.some((id) => !isValidSpotifyId(id))) {
+      return res.status(400).json({ error: 'favorite_album_ids_invalid' });
+    }
+
+    updates.push(`favorite_album_ids = $${values.length + 1}`);
+    values.push(albumIds);
+  }
+
+  if (updates.length === 0) {
+    return res.status(400).json({ error: 'profile_update_required' });
+  }
+
+  try {
+    values.push(req.user.sub);
+    const result = await pool.query(
+      `UPDATE users
+       SET ${updates.join(', ')}
+       WHERE id = $${values.length}
+       RETURNING id, spotify_id, display_name, avatar_url, bio,
+                 favorite_genres, favorite_album_ids`,
+      values
+    );
+
+    return res.json({ profile: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'profile_update_failed' });
+  }
+});
+
+app.post('/me/avatar', requireAuth, (req, res) => {
+  upload.single('avatar')(req, res, async (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'avatar_too_large' });
+      }
+      return res.status(400).json({ error: 'avatar_invalid' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'avatar_required' });
+    }
+
+    const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    try {
+      await pool.query('UPDATE users SET avatar_url = $1 WHERE id = $2', [
+        avatarUrl,
+        req.user.sub,
+      ]);
+      return res.json({ avatar_url: avatarUrl });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ error: 'avatar_update_failed' });
+    }
+  });
 });
 
 app.get('/spotify/search', rateLimit, async (req, res) => {
@@ -521,7 +687,7 @@ app.get('/me/reviews', requireAuth, async (req, res) => {
 app.get('/me/lists', requireAuth, async (req, res) => {
   try {
     const listResult = await pool.query(
-      `SELECT id, title, description, created_at
+      `SELECT id, title, description, is_ranked, created_at
        FROM lists
        WHERE user_id = $1
        ORDER BY created_at DESC`,
@@ -532,6 +698,7 @@ app.get('/me/lists', requireAuth, async (req, res) => {
       id: row.id,
       title: row.title,
       description: row.description,
+      is_ranked: row.is_ranked,
       created_at: row.created_at,
       items: [],
     }));
@@ -573,6 +740,7 @@ app.post('/me/lists', requireAuth, async (req, res) => {
   const descriptionRaw =
     typeof req.body?.description === 'string' ? req.body.description.trim() : '';
   const description = descriptionRaw.length > 0 ? descriptionRaw : null;
+  const isRanked = req.body?.is_ranked === true;
 
   if (!titleRaw) {
     return res.status(400).json({ error: 'title_required' });
@@ -588,16 +756,54 @@ app.post('/me/lists', requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO lists (user_id, title, description)
-       VALUES ($1, $2, $3)
-       RETURNING id, title, description, created_at`,
-      [req.user.sub, titleRaw, description]
+      `INSERT INTO lists (user_id, title, description, is_ranked)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, title, description, is_ranked, created_at`,
+      [req.user.sub, titleRaw, description, isRanked]
     );
 
     return res.status(201).json({ list: result.rows[0] });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'list_create_failed' });
+  }
+});
+
+app.patch('/lists/:id', requireAuth, async (req, res) => {
+  const listId = parseInt(req.params.id, 10);
+  const isRanked =
+    typeof req.body?.is_ranked === 'boolean' ? req.body.is_ranked : null;
+
+  if (!listId) {
+    return res.status(400).json({ error: 'list_id_required' });
+  }
+
+  if (isRanked === null) {
+    return res.status(400).json({ error: 'update_required' });
+  }
+
+  try {
+    const listResult = await pool.query(
+      'SELECT id FROM lists WHERE id = $1 AND user_id = $2',
+      [listId, req.user.sub]
+    );
+
+    if (listResult.rows.length === 0) {
+      return res.status(404).json({ error: 'list_not_found' });
+    }
+
+    const result = await pool.query(
+      `UPDATE lists
+       SET is_ranked = $1
+       WHERE id = $2
+       RETURNING id, title, description, is_ranked, created_at`,
+      [isRanked, listId]
+    );
+
+    return res.json({ list: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'list_update_failed' });
   }
 });
 
@@ -760,7 +966,7 @@ app.get('/lists/:id', requireAuth, async (req, res) => {
 
   try {
     const listResult = await pool.query(
-      `SELECT id, title, description, created_at
+      `SELECT id, title, description, is_ranked, created_at
        FROM lists
        WHERE id = $1 AND user_id = $2`,
       [listId, req.user.sub]

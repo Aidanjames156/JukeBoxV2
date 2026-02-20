@@ -21,6 +21,7 @@ type ListDetail = {
   id: number;
   title: string;
   description: string | null;
+  is_ranked: boolean;
   created_at: string;
   items: ListItem[];
 };
@@ -62,6 +63,8 @@ export default function ListPage() {
   const [reorderError, setReorderError] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [rankedSaving, setRankedSaving] = useState(false);
+  const [rankedError, setRankedError] = useState<string | null>(null);
 
   const suggestionOpen = useMemo(
     () => query.trim().length > 1 && suggestions.length > 0,
@@ -347,6 +350,41 @@ export default function ListPage() {
     await addAlbumToList(albumId);
   }
 
+  async function handleRankedToggle(nextValue: boolean) {
+    if (!listId || !list) {
+      return;
+    }
+
+    setRankedSaving(true);
+    setRankedError(null);
+    try {
+      const response = await fetch(`${apiUrl}/lists/${listId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ is_ranked: nextValue }),
+      });
+
+      if (!response.ok) {
+        throw new Error("ranked_update_failed");
+      }
+
+      const data = await response.json();
+      const updatedRanked =
+        typeof data?.list?.is_ranked === "boolean"
+          ? data.list.is_ranked
+          : nextValue;
+
+      setList((prev) =>
+        prev ? { ...prev, is_ranked: updatedRanked } : prev
+      );
+    } catch (err) {
+      setRankedError("Could not update list ranking.");
+    } finally {
+      setRankedSaving(false);
+    }
+  }
+
   function buildOrderedItems(
     items: ListItem[],
     sourceId: string,
@@ -412,7 +450,7 @@ export default function ListPage() {
     event: React.DragEvent<HTMLDivElement>,
     itemId: string
   ) {
-    if (reorderSaving) {
+    if (reorderSaving || !list?.is_ranked) {
       return;
     }
     event.dataTransfer.effectAllowed = "move";
@@ -424,7 +462,7 @@ export default function ListPage() {
     event: React.DragEvent<HTMLDivElement>,
     itemId: string
   ) {
-    if (reorderSaving) {
+    if (reorderSaving || !list?.is_ranked) {
       return;
     }
     event.preventDefault();
@@ -438,7 +476,7 @@ export default function ListPage() {
     targetId: string
   ) {
     event.preventDefault();
-    if (!list || reorderSaving) {
+    if (!list || reorderSaving || !list.is_ranked) {
       return;
     }
 
@@ -574,6 +612,11 @@ export default function ListPage() {
                 {reorderError}
               </div>
             )}
+            {rankedError && (
+              <div className="mt-3 border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200">
+                {rankedError}
+              </div>
+            )}
             <button
               type="submit"
               className="mt-4 rounded-none bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-strong)] disabled:text-[var(--muted)]"
@@ -583,13 +626,29 @@ export default function ListPage() {
               </button>
             </form>
 
+            <div className="flex flex-wrap items-center justify-between gap-4 border border-[color:var(--border)] px-4 py-3 text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[var(--accent)]"
+                  checked={list.is_ranked}
+                  disabled={rankedSaving}
+                  onChange={(event) => handleRankedToggle(event.target.checked)}
+                />
+                Ranked list
+              </label>
+              <span className="text-[10px] text-[var(--muted-strong)]">
+                {list.is_ranked ? "Drag to reorder" : "Unranked list"}
+              </span>
+            </div>
+
             <div className="space-y-4">
               {list.items.length === 0 && (
                 <div className="border border-[color:var(--border)] p-6 text-sm text-[var(--muted)]">
                   No albums yet. Start typing to add one.
                 </div>
               )}
-              {list.items.map((item) => {
+              {list.items.map((item, index) => {
                 const album = albumMap[item.spotify_album_id];
                 const isDragging = draggingId === item.spotify_album_id;
                 const isDragOver = dragOverId === item.spotify_album_id;
@@ -598,8 +657,10 @@ export default function ListPage() {
                     key={item.spotify_album_id}
                     className={`group flex flex-col gap-4 border border-[color:var(--border)] p-4 transition md:flex-row md:items-center ${
                       isDragOver ? "border-[var(--accent)] bg-[color:var(--surface-strong)]" : ""
-                    } ${isDragging ? "opacity-70" : ""}`}
-                    draggable={!reorderSaving}
+                    } ${isDragging ? "opacity-70" : ""} ${
+                      list.is_ranked ? "cursor-grab" : ""
+                    }`}
+                    draggable={list.is_ranked && !reorderSaving}
                     onDragStart={(event) =>
                       handleDragStart(event, item.spotify_album_id)
                     }
@@ -624,6 +685,11 @@ export default function ListPage() {
                         </div>
                       )}
                     </div>
+                    {list.is_ranked && (
+                      <div className="w-10 text-xs font-semibold text-[var(--muted-strong)]">
+                        #{index + 1}
+                      </div>
+                    )}
                     <div className="flex-1">
                       <p className="text-sm font-semibold text-[var(--foreground)]">
                         {album?.name || "Unknown album"}
@@ -632,19 +698,21 @@ export default function ListPage() {
                         {album?.artists?.join(", ") || item.spotify_album_id}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-[var(--muted)] opacity-0 transition group-hover:opacity-100">
-                      <span
-                        className="cursor-grab border border-[color:var(--border)] px-2 py-1 transition group-active:cursor-grabbing"
-                        aria-hidden="true"
-                      >
-                        Drag
-                      </span>
-                      {reorderSaving && (
-                        <span className="text-[var(--muted-strong)]">
-                          Saving...
+                    {list.is_ranked && (
+                      <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-[var(--muted)] opacity-0 transition group-hover:opacity-100">
+                        <span
+                          className="cursor-grab border border-[color:var(--border)] px-2 py-1 transition group-active:cursor-grabbing"
+                          aria-hidden="true"
+                        >
+                          Drag
                         </span>
-                      )}
-                    </div>
+                        {reorderSaving && (
+                          <span className="text-[var(--muted-strong)]">
+                            Saving...
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
