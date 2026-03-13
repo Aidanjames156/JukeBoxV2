@@ -16,6 +16,8 @@ type Review = {
   rating: number;
   body: string | null;
   created_at: string;
+  is_pinned?: boolean;
+  pinned_at?: string | null;
   user: User;
 };
 
@@ -51,9 +53,16 @@ export default function AlbumPage() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [reviewsLoading, setReviewsLoading] = useState(true);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewActionError, setReviewActionError] = useState<string | null>(null);
   const [ratingValue, setRatingValue] = useState("8");
   const [bodyValue, setBodyValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [editingReviewId, setEditingReviewId] = useState<number | null>(null);
+  const [editRatingValue, setEditRatingValue] = useState("8");
+  const [editBodyValue, setEditBodyValue] = useState("");
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewDeleting, setReviewDeleting] = useState<number | null>(null);
+  const [reviewPinning, setReviewPinning] = useState<number | null>(null);
 
   const averageRating = useMemo(() => {
     if (reviews.length === 0) {
@@ -80,9 +89,21 @@ export default function AlbumPage() {
           credentials: "include",
         });
 
+        if (!response.ok) {
+          if (!cancelled) {
+            setError("Could not load album details.");
+          }
+          return;
+        }
+
         const data = await response.json();
         if (!cancelled) {
-          setAlbum(data.album || null);
+          if (!data.album) {
+            setError("Album details unavailable.");
+            setAlbum(null);
+          } else {
+            setAlbum(data.album);
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -215,6 +236,136 @@ export default function AlbumPage() {
     }
   }
 
+  function startEditReview(review: Review) {
+    setReviewActionError(null);
+    setEditingReviewId(review.id);
+    setEditRatingValue(String(review.rating));
+    setEditBodyValue(review.body || "");
+  }
+
+  async function handleReviewUpdate(reviewId: number) {
+    const ratingNumber = parseInt(editRatingValue, 10);
+    if (Number.isNaN(ratingNumber) || ratingNumber < 1 || ratingNumber > 10) {
+      setReviewActionError("Rating must be between 1 and 10.");
+      return;
+    }
+
+    setReviewSaving(true);
+    setReviewActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          rating: ratingNumber,
+          body: editBodyValue.trim() || null,
+        }),
+      });
+
+      if (!response.ok) {
+        setReviewActionError("Could not update review.");
+        return;
+      }
+
+      const data = await response.json();
+      if (data.review) {
+        setReviews((prev) =>
+          prev.map((review) =>
+            review.id === reviewId
+              ? {
+                  ...review,
+                  rating: data.review.rating,
+                  body: data.review.body,
+                  is_pinned:
+                    typeof data.review.is_pinned === "boolean"
+                      ? data.review.is_pinned
+                      : review.is_pinned,
+                  pinned_at:
+                    typeof data.review.pinned_at !== "undefined"
+                      ? data.review.pinned_at
+                      : review.pinned_at,
+                }
+              : review
+          )
+        );
+        setEditingReviewId(null);
+      }
+    } catch (err) {
+      setReviewActionError("Could not update review.");
+    } finally {
+      setReviewSaving(false);
+    }
+  }
+
+  async function handleReviewDelete(reviewId: number) {
+    if (!window.confirm("Delete this review?")) {
+      return;
+    }
+
+    setReviewDeleting(reviewId);
+    setReviewActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        setReviewActionError("Could not delete review.");
+        return;
+      }
+
+      setReviews((prev) => prev.filter((review) => review.id !== reviewId));
+    } catch (err) {
+      setReviewActionError("Could not delete review.");
+    } finally {
+      setReviewDeleting(null);
+    }
+  }
+
+  async function handleReviewPin(reviewId: number, nextPinned: boolean) {
+    setReviewPinning(reviewId);
+    setReviewActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ is_pinned: nextPinned }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        if (data?.error === "pinned_limit") {
+          setReviewActionError("You can only pin up to 3 reviews.");
+          return;
+        }
+        setReviewActionError("Could not update pinned reviews.");
+        return;
+      }
+
+      const data = await response.json();
+      if (data.review) {
+        setReviews((prev) =>
+          prev.map((review) =>
+            review.id === reviewId
+              ? {
+                  ...review,
+                  is_pinned: data.review.is_pinned,
+                  pinned_at: data.review.pinned_at,
+                }
+              : review
+          )
+        );
+      }
+    } catch (err) {
+      setReviewActionError("Could not update pinned reviews.");
+    } finally {
+      setReviewPinning(null);
+    }
+  }
+
   function formatDate(value: string) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
@@ -332,7 +483,7 @@ export default function AlbumPage() {
                   Tracklist
                 </p>
                 <div className="max-h-[360px] space-y-2 overflow-y-auto pr-2">
-                  {album.tracks.map((track) => (
+                  {(album.tracks || []).map((track) => (
                     <div
                       key={track.id}
                       className="flex items-center justify-between border-b border-[color:var(--border)] py-2 text-xs text-[var(--foreground)]"
@@ -441,6 +592,11 @@ export default function AlbumPage() {
             {reviewsLoading && (
               <p className="text-sm text-[var(--muted)]">Loading reviews...</p>
             )}
+            {reviewActionError && (
+              <div className="border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">
+                {reviewActionError}
+              </div>
+            )}
             {!reviewsLoading && reviews.length === 0 && (
               <p className="text-sm text-[var(--muted)]">
                 No reviews yet. Be the first to write one.
@@ -459,13 +615,94 @@ export default function AlbumPage() {
                     {formatDate(review.created_at)}
                   </div>
                 </div>
-                <div className="mt-2 text-xs uppercase tracking-[0.2em] text-[var(--accent-strong)]">
-                  Rating {review.rating}/10
-                </div>
-                {review.body && (
-                  <p className="mt-3 text-sm text-[var(--foreground)]">
-                    {review.body}
-                  </p>
+                {editingReviewId === review.id ? (
+                  <div className="mt-3 space-y-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
+                        Rating
+                      </label>
+                      <select
+                        className="rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-3 py-2 text-xs text-[var(--foreground)] outline-none transition focus:border-[var(--accent)]"
+                        value={editRatingValue}
+                        onChange={(event) => setEditRatingValue(event.target.value)}
+                      >
+                        {Array.from({ length: 10 }, (_, idx) => String(idx + 1)).map(
+                          (value) => (
+                            <option key={value} value={value}>
+                              {value}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+                    <textarea
+                      className="min-h-[100px] w-full rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)]"
+                      value={editBodyValue}
+                      onChange={(event) => setEditBodyValue(event.target.value)}
+                    />
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">
+                      <button
+                        type="button"
+                        className="rounded-none bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-strong)] disabled:text-[var(--muted)]"
+                        onClick={() => handleReviewUpdate(review.id)}
+                        disabled={reviewSaving}
+                      >
+                        {reviewSaving ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        className="border border-[color:var(--border)] px-3 py-2 text-xs text-[var(--foreground)] transition hover:border-[var(--accent)]"
+                        onClick={() => setEditingReviewId(null)}
+                        disabled={reviewSaving}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-2 text-xs uppercase tracking-[0.2em] text-[var(--accent-strong)]">
+                      Rating {review.rating}/10
+                    </div>
+                    {review.body && (
+                      <p className="mt-3 text-sm text-[var(--foreground)]">
+                        {review.body}
+                      </p>
+                    )}
+                    {user && review.user?.id === user.id && (
+                      <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-[0.3em] text-[var(--muted)]">
+                        <button
+                          type="button"
+                          className="border border-[color:var(--border)] px-3 py-2 transition hover:border-[var(--accent)]"
+                          onClick={() => startEditReview(review)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="border border-[color:var(--border)] px-3 py-2 transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:text-[var(--muted-strong)]"
+                          onClick={() =>
+                            handleReviewPin(review.id, !review.is_pinned)
+                          }
+                          disabled={reviewPinning === review.id}
+                        >
+                          {reviewPinning === review.id
+                            ? "Saving..."
+                            : review.is_pinned
+                            ? "Unpin"
+                            : "Pin"}
+                        </button>
+                        <button
+                          type="button"
+                          className="border border-red-500/40 px-3 py-2 text-red-200 transition hover:border-red-500"
+                          onClick={() => handleReviewDelete(review.id)}
+                          disabled={reviewDeleting === review.id}
+                        >
+                          {reviewDeleting === review.id ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             ))}

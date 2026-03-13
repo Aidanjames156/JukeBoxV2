@@ -93,8 +93,8 @@ export default function Home() {
         `${apiUrl}/spotify/search?query=${encodeURIComponent(query.trim())}`,
         { credentials: "include" }
       );
-      if (response.status === 401) {
-        setError("Search requires Spotify authentication.");
+      if (!response.ok) {
+        setError("Search failed. Try again.");
         setResults([]);
         return;
       }
@@ -114,12 +114,18 @@ export default function Home() {
       const response = await fetch(`${apiUrl}/spotify/albums/${albumId}`, {
         credentials: "include",
       });
-      if (response.status === 401) {
-        setError("Please sign in with Spotify to view details.");
+      if (!response.ok) {
+        setError("Could not load album details.");
+        setSelected(null);
         return;
       }
       const data = await response.json();
-      setSelected(data.album || null);
+      if (!data.album) {
+        setError("Album details unavailable.");
+        setSelected(null);
+        return;
+      }
+      setSelected(data.album);
     } catch (err) {
       setError("Could not load album details.");
     } finally {
@@ -340,7 +346,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="max-h-64 space-y-2 overflow-y-auto pr-2">
-                  {selected.tracks.map((track) => (
+                  {(selected.tracks || []).map((track) => (
                     <div
                       key={track.id}
                       className="flex items-center justify-between border-b border-[color:var(--border)] py-2 text-xs text-[var(--muted)]"

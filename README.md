@@ -18,6 +18,8 @@ Endpoints:
 - `GET /spotify/albums/:id` fetch album details (no auth required)
 - `GET /albums/:id/reviews` list reviews for an album (no auth required)
 - `POST /albums/:id/reviews` create a review (auth required)
+- `PATCH /reviews/:id` update a review (auth required)
+- `DELETE /reviews/:id` delete a review (auth required)
 - `GET /me/reviews` list the current user's reviews (auth required)
 - `GET /me/lists` list the current user's lists with album ids (auth required)
 - `POST /me/lists` create a new list (auth required)

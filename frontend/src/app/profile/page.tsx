@@ -16,6 +16,8 @@ type Review = {
   rating: number;
   body: string | null;
   created_at: string;
+  is_pinned?: boolean;
+  pinned_at?: string | null;
 };
 
 type ListItem = {
@@ -82,6 +84,13 @@ export default function ProfilePage() {
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
+  const [editingReviewId, setEditingReviewId] = useState<number | null>(null);
+  const [editRatingValue, setEditRatingValue] = useState("8");
+  const [editBodyValue, setEditBodyValue] = useState("");
+  const [reviewActionError, setReviewActionError] = useState<string | null>(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewDeleting, setReviewDeleting] = useState<number | null>(null);
+  const [reviewPinning, setReviewPinning] = useState<number | null>(null);
 
   const averageRating = useMemo(() => {
     if (reviews.length === 0) {
@@ -97,6 +106,21 @@ export default function ProfilePage() {
       .map((genre) => genre.trim())
       .filter((genre) => genre.length > 0);
   }, [genresInput]);
+
+  const pinnedReviews = useMemo(() => {
+    return reviews
+      .filter((review) => review.is_pinned)
+      .sort((a, b) => {
+        const aTime = a.pinned_at ? new Date(a.pinned_at).getTime() : 0;
+        const bTime = b.pinned_at ? new Date(b.pinned_at).getTime() : 0;
+        return bTime - aTime;
+      })
+      .slice(0, 3);
+  }, [reviews]);
+
+  const recentReviews = useMemo(() => {
+    return reviews.filter((review) => !review.is_pinned);
+  }, [reviews]);
 
   const avatarInitial = (
     displayName || user?.spotify_id || "J"
@@ -513,6 +537,178 @@ export default function ProfilePage() {
       setProfileError(null);
     }
     setEditingProfile(nextValue);
+  }
+
+  function startEditReview(review: Review) {
+    setReviewActionError(null);
+    setEditingReviewId(review.id);
+    setEditRatingValue(String(review.rating));
+    setEditBodyValue(review.body || "");
+  }
+
+  async function handleReviewUpdate(reviewId: number) {
+    const ratingNumber = parseInt(editRatingValue, 10);
+    if (Number.isNaN(ratingNumber) || ratingNumber < 1 || ratingNumber > 10) {
+      setReviewActionError("Rating must be between 1 and 10.");
+      return;
+    }
+
+    setReviewSaving(true);
+    setReviewActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          rating: ratingNumber,
+          body: editBodyValue.trim() || null,
+        }),
+      });
+
+      if (!response.ok) {
+        setReviewActionError("Could not update review.");
+        return;
+      }
+
+      const data = await response.json();
+      if (data.review) {
+        setReviews((prev) =>
+          prev.map((review) =>
+            review.id === reviewId
+              ? {
+                  ...review,
+                  rating: data.review.rating,
+                  body: data.review.body,
+                  is_pinned:
+                    typeof data.review.is_pinned === "boolean"
+                      ? data.review.is_pinned
+                      : review.is_pinned,
+                  pinned_at:
+                    typeof data.review.pinned_at !== "undefined"
+                      ? data.review.pinned_at
+                      : review.pinned_at,
+                }
+              : review
+          )
+        );
+        setEditingReviewId(null);
+      }
+    } catch (err) {
+      setReviewActionError("Could not update review.");
+    } finally {
+      setReviewSaving(false);
+    }
+  }
+
+  async function handleReviewDelete(reviewId: number) {
+    if (!window.confirm("Delete this review?")) {
+      return;
+    }
+
+    setReviewDeleting(reviewId);
+    setReviewActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        setReviewActionError("Could not delete review.");
+        return;
+      }
+
+      setReviews((prev) => prev.filter((review) => review.id !== reviewId));
+    } catch (err) {
+      setReviewActionError("Could not delete review.");
+    } finally {
+      setReviewDeleting(null);
+    }
+  }
+
+  async function handleReviewPin(reviewId: number, nextPinned: boolean) {
+    setReviewPinning(reviewId);
+    setReviewActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ is_pinned: nextPinned }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        if (data?.error === "pinned_limit") {
+          setReviewActionError("You can only pin up to 3 reviews.");
+          return;
+        }
+        setReviewActionError("Could not update pinned reviews.");
+        return;
+      }
+
+      const data = await response.json();
+      if (data.review) {
+        setReviews((prev) =>
+          prev.map((review) =>
+            review.id === reviewId
+              ? {
+                  ...review,
+                  is_pinned: data.review.is_pinned,
+                  pinned_at: data.review.pinned_at,
+                }
+              : review
+          )
+        );
+      }
+    } catch (err) {
+      setReviewActionError("Could not update pinned reviews.");
+    } finally {
+      setReviewPinning(null);
+    }
+  }
+
+  async function handleReviewPin(reviewId: number, nextPinned: boolean) {
+    setReviewPinning(reviewId);
+    setReviewActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ is_pinned: nextPinned }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        if (data?.error === "pinned_limit") {
+          setReviewActionError("You can only pin up to 3 reviews.");
+          return;
+        }
+        setReviewActionError("Could not update pinned reviews.");
+        return;
+      }
+
+      const data = await response.json();
+      if (data.review) {
+        setReviews((prev) =>
+          prev.map((review) =>
+            review.id === reviewId
+              ? {
+                  ...review,
+                  is_pinned: data.review.is_pinned,
+                  pinned_at: data.review.pinned_at,
+                }
+              : review
+          )
+        );
+      }
+    } catch (err) {
+      setReviewActionError("Could not update pinned reviews.");
+    } finally {
+      setReviewPinning(null);
+    }
   }
 
   // list creation and item addition moved to dedicated list pages
@@ -1043,7 +1239,7 @@ export default function ProfilePage() {
           <section className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-[var(--foreground)]">
-                Recent reviews
+                Reviews
               </h2>
               <span className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
                 Latest first
@@ -1056,14 +1252,110 @@ export default function ProfilePage() {
               </div>
             )}
 
+            {reviewActionError && (
+              <div className="border border-red-500/40 bg-red-500/10 p-4 text-xs text-red-200">
+                {reviewActionError}
+              </div>
+            )}
+
             {!loading && reviews.length === 0 && (
               <div className="border border-[color:var(--border)] p-6 text-sm text-[var(--muted)]">
                 No reviews yet. Head back to search and rate an album.
               </div>
             )}
 
+            {!loading && reviews.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-[var(--foreground)]">
+                    Pinned reviews
+                  </h3>
+                  <span className="text-[10px] uppercase tracking-[0.3em] text-[var(--muted)]">
+                    Up to 3
+                  </span>
+                </div>
+                {pinnedReviews.length === 0 && (
+                  <div className="border border-[color:var(--border)] p-4 text-sm text-[var(--muted)]">
+                    Pin your favorite reviews to show them first.
+                  </div>
+                )}
+                <div className="space-y-4">
+                  {pinnedReviews.map((review) => {
+                    const album = albumMap[review.spotify_album_id];
+                    return (
+                      <div
+                        key={`pinned-${review.id}`}
+                        className="flex flex-col gap-4 border border-[color:var(--border)] p-5 md:flex-row md:items-start"
+                      >
+                        <div className="relative h-28 w-28 flex-shrink-0 overflow-hidden border border-[color:var(--border)] bg-[#0b0d12]">
+                          {album?.image ? (
+                            <img
+                              src={album.image}
+                              alt={`${album.name} cover`}
+                              className="absolute inset-0 h-full w-full object-cover"
+                            />
+                          ) : null}
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold text-[var(--foreground)]">
+                                {album?.name || "Album"}
+                              </p>
+                              <p className="text-xs text-[var(--muted)]">
+                                {album?.artists?.join(", ") ||
+                                  review.spotify_album_id}
+                              </p>
+                            </div>
+                            <span className="text-xs text-[var(--muted)]">
+                              {formatDate(review.created_at)}
+                            </span>
+                          </div>
+                          <div className="text-xs uppercase tracking-[0.2em] text-[var(--accent-strong)]">
+                            Rating {review.rating}/10
+                          </div>
+                          {review.body && (
+                            <p className="text-sm text-[var(--foreground)]">
+                              {review.body}
+                            </p>
+                          )}
+                          <div className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-[0.3em] text-[var(--muted)]">
+                            <button
+                              type="button"
+                              className="border border-[color:var(--border)] px-3 py-2 transition hover:border-[var(--accent)]"
+                              onClick={() => startEditReview(review)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="border border-[color:var(--border)] px-3 py-2 transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:text-[var(--muted-strong)]"
+                              onClick={() => handleReviewPin(review.id, false)}
+                              disabled={reviewPinning === review.id}
+                            >
+                              {reviewPinning === review.id ? "Saving..." : "Unpin"}
+                            </button>
+                            <button
+                              type="button"
+                              className="border border-red-500/40 px-3 py-2 text-red-200 transition hover:border-red-500"
+                              onClick={() => handleReviewDelete(review.id)}
+                              disabled={reviewDeleting === review.id}
+                            >
+                              {reviewDeleting === review.id
+                                ? "Deleting..."
+                                : "Delete"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="space-y-4">
-              {reviews.map((review) => {
+              {recentReviews.map((review) => {
                 const album = albumMap[review.spotify_album_id];
                 return (
                   <div
@@ -1093,13 +1385,92 @@ export default function ProfilePage() {
                           {formatDate(review.created_at)}
                         </span>
                       </div>
-                      <div className="text-xs uppercase tracking-[0.2em] text-[var(--accent-strong)]">
-                        Rating {review.rating}/10
-                      </div>
-                      {review.body && (
-                        <p className="text-sm text-[var(--foreground)]">
-                          {review.body}
-                        </p>
+                      {editingReviewId === review.id ? (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <label className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
+                              Rating
+                            </label>
+                            <select
+                              className="rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-3 py-2 text-xs text-[var(--foreground)] outline-none transition focus:border-[var(--accent)]"
+                              value={editRatingValue}
+                              onChange={(event) =>
+                                setEditRatingValue(event.target.value)
+                              }
+                            >
+                              {Array.from({ length: 10 }, (_, idx) =>
+                                String(idx + 1)
+                              ).map((value) => (
+                                <option key={value} value={value}>
+                                  {value}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <textarea
+                            className="min-h-[100px] w-full rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)]"
+                            value={editBodyValue}
+                            onChange={(event) =>
+                              setEditBodyValue(event.target.value)
+                            }
+                          />
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">
+                            <button
+                              type="button"
+                              className="rounded-none bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-strong)] disabled:text-[var(--muted)]"
+                              onClick={() => handleReviewUpdate(review.id)}
+                              disabled={reviewSaving}
+                            >
+                              {reviewSaving ? "Saving..." : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              className="border border-[color:var(--border)] px-3 py-2 text-xs text-[var(--foreground)] transition hover:border-[var(--accent)]"
+                              onClick={() => setEditingReviewId(null)}
+                              disabled={reviewSaving}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="text-xs uppercase tracking-[0.2em] text-[var(--accent-strong)]">
+                            Rating {review.rating}/10
+                          </div>
+                          {review.body && (
+                            <p className="text-sm text-[var(--foreground)]">
+                              {review.body}
+                            </p>
+                          )}
+                          <div className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-[0.3em] text-[var(--muted)]">
+                            <button
+                              type="button"
+                              className="border border-[color:var(--border)] px-3 py-2 transition hover:border-[var(--accent)]"
+                              onClick={() => startEditReview(review)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="border border-[color:var(--border)] px-3 py-2 transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:text-[var(--muted-strong)]"
+                              onClick={() => handleReviewPin(review.id, true)}
+                              disabled={reviewPinning === review.id}
+                            >
+                              {reviewPinning === review.id ? "Saving..." : "Pin"}
+                            </button>
+                            <button
+                              type="button"
+                              className="border border-red-500/40 px-3 py-2 text-red-200 transition hover:border-red-500"
+                              onClick={() => handleReviewDelete(review.id)}
+                              disabled={reviewDeleting === review.id}
+                            >
+                              {reviewDeleting === review.id
+                                ? "Deleting..."
+                                : "Delete"}
+                            </button>
+                          </div>
+                        </>
                       )}
                       <Link
                         href={`/albums/${review.spotify_album_id}`}

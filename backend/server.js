@@ -575,7 +575,7 @@ app.get('/albums/:id/reviews', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT r.id, r.rating, r.body, r.created_at,
+      `SELECT r.id, r.rating, r.body, r.created_at, r.is_pinned, r.pinned_at,
               u.id AS user_id, u.display_name, u.spotify_id
        FROM reviews r
        JOIN users u ON r.user_id = u.id
@@ -590,6 +590,8 @@ app.get('/albums/:id/reviews', async (req, res) => {
       rating: row.rating,
       body: row.body,
       created_at: row.created_at,
+      is_pinned: row.is_pinned,
+      pinned_at: row.pinned_at,
       user: {
         id: row.user_id,
         display_name: row.display_name,
@@ -626,7 +628,7 @@ app.post('/albums/:id/reviews', requireAuth, async (req, res) => {
     const result = await pool.query(
       `INSERT INTO reviews (user_id, spotify_album_id, rating, body)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, rating, body, created_at`,
+       RETURNING id, rating, body, created_at, is_pinned, pinned_at`,
       [req.user.sub, albumId, rating, body]
     );
 
@@ -642,6 +644,8 @@ app.post('/albums/:id/reviews', requireAuth, async (req, res) => {
         rating: result.rows[0].rating,
         body: result.rows[0].body,
         created_at: result.rows[0].created_at,
+        is_pinned: result.rows[0].is_pinned,
+        pinned_at: result.rows[0].pinned_at,
         user: {
           id: userRow.id || req.user.sub,
           display_name: userRow.display_name || null,
@@ -655,13 +659,138 @@ app.post('/albums/:id/reviews', requireAuth, async (req, res) => {
   }
 });
 
+app.patch('/reviews/:id', requireAuth, async (req, res) => {
+  const reviewId = parseInt(req.params.id, 10);
+  const hasRating = Object.prototype.hasOwnProperty.call(req.body || {}, 'rating');
+  const hasBody = Object.prototype.hasOwnProperty.call(req.body || {}, 'body');
+  const hasPinned = Object.prototype.hasOwnProperty.call(req.body || {}, 'is_pinned');
+
+  if (!reviewId) {
+    return res.status(400).json({ error: 'review_id_required' });
+  }
+
+  if (!hasRating && !hasBody && !hasPinned) {
+    return res.status(400).json({ error: 'review_update_required' });
+  }
+
+  const updates = [];
+  const values = [];
+  let nextPinned = null;
+
+  if (hasRating) {
+    const rating = parseInt(req.body?.rating, 10);
+    if (Number.isNaN(rating) || rating < 1 || rating > 10) {
+      return res.status(400).json({ error: 'rating_invalid' });
+    }
+    updates.push(`rating = $${values.length + 1}`);
+    values.push(rating);
+  }
+
+  if (hasBody) {
+    const bodyRaw = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+    const body = bodyRaw.length > 0 ? bodyRaw : null;
+    if (body && body.length > 2000) {
+      return res.status(400).json({ error: 'body_too_long' });
+    }
+    updates.push(`body = $${values.length + 1}`);
+    values.push(body);
+  }
+
+  if (hasPinned) {
+    if (typeof req.body?.is_pinned !== 'boolean') {
+      return res.status(400).json({ error: 'is_pinned_invalid' });
+    }
+    nextPinned = req.body.is_pinned;
+  }
+
+  try {
+    const reviewResult = await pool.query(
+      `SELECT id, rating, body, created_at, spotify_album_id, is_pinned, pinned_at
+       FROM reviews
+       WHERE id = $1 AND user_id = $2`,
+      [reviewId, req.user.sub]
+    );
+
+    if (reviewResult.rows.length === 0) {
+      return res.status(404).json({ error: 'review_not_found' });
+    }
+
+    const currentPinned = reviewResult.rows[0].is_pinned === true;
+    if (nextPinned === true && !currentPinned) {
+      const pinnedCountResult = await pool.query(
+        'SELECT COUNT(*) FROM reviews WHERE user_id = $1 AND is_pinned = true',
+        [req.user.sub]
+      );
+      const pinnedCount = parseInt(pinnedCountResult.rows[0]?.count || '0', 10);
+      if (pinnedCount >= 3) {
+        return res.status(400).json({ error: 'pinned_limit' });
+      }
+      updates.push(`is_pinned = $${values.length + 1}`);
+      values.push(true);
+      updates.push(`pinned_at = $${values.length + 1}`);
+      values.push(new Date().toISOString());
+    } else if (nextPinned === false && currentPinned) {
+      updates.push(`is_pinned = $${values.length + 1}`);
+      values.push(false);
+      updates.push(`pinned_at = $${values.length + 1}`);
+      values.push(null);
+    }
+
+    if (updates.length === 0) {
+      return res.json({ review: reviewResult.rows[0] });
+    }
+
+    values.push(reviewId, req.user.sub);
+    const result = await pool.query(
+      `UPDATE reviews
+       SET ${updates.join(', ')}
+       WHERE id = $${values.length - 1} AND user_id = $${values.length}
+       RETURNING id, rating, body, created_at, spotify_album_id, is_pinned, pinned_at`,
+      values
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'review_not_found' });
+    }
+
+    return res.json({ review: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'review_update_failed' });
+  }
+});
+
+app.delete('/reviews/:id', requireAuth, async (req, res) => {
+  const reviewId = parseInt(req.params.id, 10);
+
+  if (!reviewId) {
+    return res.status(400).json({ error: 'review_id_required' });
+  }
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM reviews WHERE id = $1 AND user_id = $2 RETURNING id',
+      [reviewId, req.user.sub]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'review_not_found' });
+    }
+
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'review_delete_failed' });
+  }
+});
+
 app.get('/me/reviews', requireAuth, async (req, res) => {
   const limitRaw = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
   const limit = Math.min(Math.max(parseInt(limitRaw || '50', 10), 1), 100);
 
   try {
     const result = await pool.query(
-      `SELECT id, spotify_album_id, rating, body, created_at
+      `SELECT id, spotify_album_id, rating, body, created_at, is_pinned, pinned_at
        FROM reviews
        WHERE user_id = $1
        ORDER BY created_at DESC
@@ -675,6 +804,8 @@ app.get('/me/reviews', requireAuth, async (req, res) => {
       rating: row.rating,
       body: row.body,
       created_at: row.created_at,
+      is_pinned: row.is_pinned,
+      pinned_at: row.pinned_at,
     }));
 
     return res.json({ reviews });

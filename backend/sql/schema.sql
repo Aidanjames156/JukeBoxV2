@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS reviews (
   spotify_album_id TEXT NOT NULL,
   rating SMALLINT NOT NULL CHECK (rating >= 1 AND rating <= 10),
   body TEXT,
+  is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+  pinned_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
