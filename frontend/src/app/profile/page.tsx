@@ -58,6 +58,13 @@ type SearchAlbum = {
   release_date: string;
 };
 
+type UserSummary = {
+  id: number;
+  spotify_id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+};
+
 export default function ProfilePage() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:4000";
   const [user, setUser] = useState<User | null>(null);
@@ -69,6 +76,19 @@ export default function ProfilePage() {
   const [lists, setLists] = useState<List[]>([]);
   const [listsLoading, setListsLoading] = useState(true);
   const [listsError, setListsError] = useState<string | null>(null);
+  const [listActionError, setListActionError] = useState<string | null>(null);
+  const [listDeleting, setListDeleting] = useState<number | null>(null);
+  const [followSearch, setFollowSearch] = useState("");
+  const [followResults, setFollowResults] = useState<UserSummary[]>([]);
+  const [followSearching, setFollowSearching] = useState(false);
+  const [followError, setFollowError] = useState<string | null>(null);
+  const [followActionError, setFollowActionError] = useState<string | null>(null);
+  const [followUpdatingId, setFollowUpdatingId] = useState<number | null>(null);
+  const [followers, setFollowers] = useState<UserSummary[]>([]);
+  const [following, setFollowing] = useState<UserSummary[]>([]);
+  const [followersLoading, setFollowersLoading] = useState(false);
+  const [followingLoading, setFollowingLoading] = useState(false);
+  const [followingIds, setFollowingIds] = useState<number[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -130,6 +150,16 @@ export default function ProfilePage() {
   const profileGenres = profile?.favorite_genres || [];
   const profileFavorites = profile?.favorite_album_ids || [];
   const profileBio = profile?.bio || "";
+
+  function getUserInitial(person: UserSummary) {
+    return (person.display_name || person.spotify_id || "U")
+      .charAt(0)
+      .toUpperCase();
+  }
+
+  function getUserLabel(person: UserSummary) {
+    return person.display_name || person.spotify_id;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -288,6 +318,99 @@ export default function ProfilePage() {
       cancelled = true;
     };
   }, [apiUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFollows() {
+      if (!user) {
+        setFollowers([]);
+        setFollowing([]);
+        setFollowingIds([]);
+        return;
+      }
+
+      setFollowersLoading(true);
+      setFollowingLoading(true);
+      setFollowActionError(null);
+      try {
+        const [followersResponse, followingResponse] = await Promise.all([
+          fetch(`${apiUrl}/users/${user.id}/followers?limit=12`, {
+            credentials: "include",
+          }),
+          fetch(`${apiUrl}/users/${user.id}/following?limit=12`, {
+            credentials: "include",
+          }),
+        ]);
+
+        const followersData = await followersResponse.json().catch(() => null);
+        const followingData = await followingResponse.json().catch(() => null);
+
+        if (!cancelled) {
+          const nextFollowers = Array.isArray(followersData?.followers)
+            ? followersData.followers
+            : [];
+          const nextFollowing = Array.isArray(followingData?.following)
+            ? followingData.following
+            : [];
+          setFollowers(nextFollowers);
+          setFollowing(nextFollowing);
+          setFollowingIds(nextFollowing.map((person: UserSummary) => person.id));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setFollowActionError("Could not load follow data.");
+        }
+      } finally {
+        if (!cancelled) {
+          setFollowersLoading(false);
+          setFollowingLoading(false);
+        }
+      }
+    }
+
+    loadFollows();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl, user]);
+
+  useEffect(() => {
+    if (followSearch.trim().length < 2) {
+      setFollowResults([]);
+      setFollowError(null);
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      setFollowSearching(true);
+      setFollowError(null);
+      try {
+        const response = await fetch(
+          `${apiUrl}/users/search?query=${encodeURIComponent(
+            followSearch.trim()
+          )}&limit=6`,
+          { credentials: "include" }
+        );
+
+        if (!response.ok) {
+          setFollowError("Could not search users.");
+          setFollowResults([]);
+          return;
+        }
+
+        const data = await response.json();
+        setFollowResults(Array.isArray(data.users) ? data.users : []);
+      } catch (err) {
+        setFollowError("Could not search users.");
+        setFollowResults([]);
+      } finally {
+        setFollowSearching(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timeout);
+  }, [apiUrl, followSearch]);
 
   useEffect(() => {
     if (favoriteQuery.trim().length < 2) {
@@ -669,45 +792,102 @@ export default function ProfilePage() {
     }
   }
 
-  async function handleReviewPin(reviewId: number, nextPinned: boolean) {
-    setReviewPinning(reviewId);
-    setReviewActionError(null);
+  async function handleDeleteList(listId: number) {
+    if (!window.confirm("Delete this list?")) {
+      return;
+    }
+
+    setListDeleting(listId);
+    setListActionError(null);
     try {
-      const response = await fetch(`${apiUrl}/reviews/${reviewId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+      const response = await fetch(`${apiUrl}/lists/${listId}`, {
+        method: "DELETE",
         credentials: "include",
-        body: JSON.stringify({ is_pinned: nextPinned }),
       });
 
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        if (data?.error === "pinned_limit") {
-          setReviewActionError("You can only pin up to 3 reviews.");
-          return;
-        }
-        setReviewActionError("Could not update pinned reviews.");
+      if (response.status === 401) {
+        setListActionError("Sign in to delete lists.");
         return;
       }
 
-      const data = await response.json();
-      if (data.review) {
-        setReviews((prev) =>
-          prev.map((review) =>
-            review.id === reviewId
-              ? {
-                  ...review,
-                  is_pinned: data.review.is_pinned,
-                  pinned_at: data.review.pinned_at,
-                }
-              : review
-          )
+      if (!response.ok) {
+        setListActionError("Could not delete list.");
+        return;
+      }
+
+      setLists((prev) => prev.filter((list) => list.id !== listId));
+    } catch (err) {
+      setListActionError("Could not delete list.");
+    } finally {
+      setListDeleting(null);
+    }
+  }
+
+  async function handleFollowUser(targetId: number) {
+    setFollowUpdatingId(targetId);
+    setFollowActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/users/${targetId}/follow`, {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (response.status === 401) {
+        setFollowActionError("Sign in to follow users.");
+        return;
+      }
+
+      if (!response.ok) {
+        setFollowActionError("Could not follow user.");
+        return;
+      }
+
+      setFollowingIds((prev) =>
+        prev.includes(targetId) ? prev : [...prev, targetId]
+      );
+
+      const target =
+        followResults.find((person) => person.id === targetId) ||
+        followers.find((person) => person.id === targetId);
+      if (target) {
+        setFollowing((prev) =>
+          prev.some((person) => person.id === targetId)
+            ? prev
+            : [target, ...prev]
         );
       }
     } catch (err) {
-      setReviewActionError("Could not update pinned reviews.");
+      setFollowActionError("Could not follow user.");
     } finally {
-      setReviewPinning(null);
+      setFollowUpdatingId(null);
+    }
+  }
+
+  async function handleUnfollowUser(targetId: number) {
+    setFollowUpdatingId(targetId);
+    setFollowActionError(null);
+    try {
+      const response = await fetch(`${apiUrl}/users/${targetId}/follow`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (response.status === 401) {
+        setFollowActionError("Sign in to unfollow users.");
+        return;
+      }
+
+      if (!response.ok) {
+        setFollowActionError("Could not unfollow user.");
+        return;
+      }
+
+      setFollowingIds((prev) => prev.filter((id) => id !== targetId));
+      setFollowing((prev) => prev.filter((person) => person.id !== targetId));
+    } catch (err) {
+      setFollowActionError("Could not unfollow user.");
+    } finally {
+      setFollowUpdatingId(null);
     }
   }
 
@@ -1131,6 +1311,235 @@ export default function ProfilePage() {
           </section>
         )}
 
+        {user && (
+          <section className="space-y-6 border border-[color:var(--border)] p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-[var(--foreground)]">
+                Community
+              </h2>
+              <span className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                {followers.length} followers · {following.length} following
+              </span>
+            </div>
+
+            {followActionError && (
+              <div className="border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">
+                {followActionError}
+              </div>
+            )}
+
+            <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+              <div className="space-y-3">
+                <label className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                  Find people
+                </label>
+                <input
+                  className="w-full rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-2 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)]"
+                  placeholder="Search by name or Spotify ID"
+                  value={followSearch}
+                  onChange={(event) => setFollowSearch(event.target.value)}
+                />
+                {followSearching && (
+                  <p className="text-xs text-[var(--muted)]">Searching...</p>
+                )}
+                {followError && (
+                  <div className="border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                    {followError}
+                  </div>
+                )}
+                {!followSearching &&
+                  followSearch.trim().length > 1 &&
+                  followResults.length === 0 &&
+                  !followError && (
+                    <p className="text-xs text-[var(--muted)]">
+                      No users found yet.
+                    </p>
+                  )}
+                {followResults.length > 0 && (
+                  <div className="border border-[color:var(--border)] bg-[color:var(--surface)]">
+                    {followResults.map((person) => {
+                      const isFollowing = followingIds.includes(person.id);
+                      return (
+                        <div
+                          key={person.id}
+                          className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 last:border-b-0"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 overflow-hidden border border-[color:var(--border)] bg-[color:var(--surface-strong)]">
+                              {person.avatar_url ? (
+                                <img
+                                  src={person.avatar_url}
+                                  alt={getUserLabel(person)}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-[var(--muted-strong)]">
+                                  {getUserInitial(person)}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-[var(--foreground)]">
+                                {getUserLabel(person)}
+                              </p>
+                              <p className="text-xs text-[var(--muted)]">
+                                {person.spotify_id}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="border border-[color:var(--border)] px-3 py-1 text-xs uppercase tracking-[0.2em] text-[var(--foreground)] transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:text-[var(--muted-strong)]"
+                            onClick={() =>
+                              isFollowing
+                                ? handleUnfollowUser(person.id)
+                                : handleFollowUser(person.id)
+                            }
+                            disabled={followUpdatingId === person.id}
+                          >
+                            {followUpdatingId === person.id
+                              ? "Saving..."
+                              : isFollowing
+                              ? "Unfollow"
+                              : "Follow"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                    Following
+                  </p>
+                  {followingLoading && (
+                    <p className="text-xs text-[var(--muted)]">
+                      Loading following...
+                    </p>
+                  )}
+                  {!followingLoading && following.length === 0 && (
+                    <p className="text-xs text-[var(--muted)]">
+                      You are not following anyone yet.
+                    </p>
+                  )}
+                  <div className="space-y-2">
+                    {following.map((person) => (
+                      <div
+                        key={`following-${person.id}`}
+                        className="flex items-center justify-between gap-3 border border-[color:var(--border)] px-3 py-2"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 overflow-hidden border border-[color:var(--border)] bg-[color:var(--surface-strong)]">
+                            {person.avatar_url ? (
+                              <img
+                                src={person.avatar_url}
+                                alt={getUserLabel(person)}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-[var(--muted-strong)]">
+                                {getUserInitial(person)}
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-[var(--foreground)]">
+                              {getUserLabel(person)}
+                            </p>
+                            <p className="text-xs text-[var(--muted)]">
+                              {person.spotify_id}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="border border-[color:var(--border)] px-3 py-1 text-xs uppercase tracking-[0.2em] text-[var(--foreground)] transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:text-[var(--muted-strong)]"
+                          onClick={() => handleUnfollowUser(person.id)}
+                          disabled={followUpdatingId === person.id}
+                        >
+                          {followUpdatingId === person.id
+                            ? "Saving..."
+                            : "Unfollow"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-[0.3em] text-[var(--muted)]">
+                    Followers
+                  </p>
+                  {followersLoading && (
+                    <p className="text-xs text-[var(--muted)]">
+                      Loading followers...
+                    </p>
+                  )}
+                  {!followersLoading && followers.length === 0 && (
+                    <p className="text-xs text-[var(--muted)]">
+                      No followers yet.
+                    </p>
+                  )}
+                  <div className="space-y-2">
+                    {followers.map((person) => {
+                      const isFollowing = followingIds.includes(person.id);
+                      return (
+                        <div
+                          key={`follower-${person.id}`}
+                          className="flex items-center justify-between gap-3 border border-[color:var(--border)] px-3 py-2"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="h-9 w-9 overflow-hidden border border-[color:var(--border)] bg-[color:var(--surface-strong)]">
+                              {person.avatar_url ? (
+                                <img
+                                  src={person.avatar_url}
+                                  alt={getUserLabel(person)}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-[var(--muted-strong)]">
+                                  {getUserInitial(person)}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-[var(--foreground)]">
+                                {getUserLabel(person)}
+                              </p>
+                              <p className="text-xs text-[var(--muted)]">
+                                {person.spotify_id}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="border border-[color:var(--border)] px-3 py-1 text-xs uppercase tracking-[0.2em] text-[var(--foreground)] transition hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:text-[var(--muted-strong)]"
+                            onClick={() =>
+                              isFollowing
+                                ? handleUnfollowUser(person.id)
+                                : handleFollowUser(person.id)
+                            }
+                            disabled={followUpdatingId === person.id}
+                          >
+                            {followUpdatingId === person.id
+                              ? "Saving..."
+                              : isFollowing
+                              ? "Unfollow"
+                              : "Follow"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
         {error && (
           <div className="border border-red-500/40 bg-red-500/10 p-6 text-sm text-red-200">
             {error}
@@ -1168,6 +1577,12 @@ export default function ProfilePage() {
               </div>
             )}
 
+            {listActionError && (
+              <div className="border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+                {listActionError}
+              </div>
+            )}
+
             {!listsLoading && lists.length === 0 && (
               <div className="border border-[color:var(--border)] p-6 text-sm text-[var(--muted)]">
                 No lists yet. Create one to start collecting albums.
@@ -1176,60 +1591,74 @@ export default function ProfilePage() {
 
             <div className="grid gap-4 md:grid-cols-2">
               {lists.map((list) => (
-                <Link
+                <div
                   key={list.id}
-                  href={`/lists/${list.id}`}
                   className="border border-[color:var(--border)] p-5 transition hover:border-[var(--accent)]"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                      <Link
+                        href={`/lists/${list.id}`}
+                        className="text-sm font-semibold text-[var(--foreground)] hover:text-[var(--accent)]"
+                      >
                         {list.title}
-                      </p>
+                      </Link>
                       {list.description && (
                         <p className="text-xs text-[var(--muted)]">
                           {list.description}
                         </p>
                       )}
                     </div>
-                    <span className="text-xs text-[var(--muted)]">
-                      {list.items.length} album
-                      {list.items.length === 1 ? "" : "s"}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-[var(--muted)]">
+                        {list.items.length} album
+                        {list.items.length === 1 ? "" : "s"}
+                      </span>
+                      <button
+                        type="button"
+                        className="border border-red-500/40 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-red-200 transition hover:border-red-500 disabled:cursor-not-allowed disabled:text-red-300/60"
+                        onClick={() => handleDeleteList(list.id)}
+                        disabled={listDeleting === list.id}
+                      >
+                        {listDeleting === list.id ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-2 text-[10px] uppercase tracking-[0.3em] text-[var(--muted-strong)]">
                     {list.is_ranked ? "Ranked list" : "Unranked list"}
                   </div>
 
-                  <div className="mt-4 grid grid-cols-4 gap-2">
-                    {list.items.length === 0 && (
-                      <p className="col-span-full text-xs text-[var(--muted)]">
-                        No albums yet.
-                      </p>
-                    )}
-                    {list.items.slice(0, 4).map((item) => {
-                      const album = albumMap[item.spotify_album_id];
-                      return (
-                        <div
-                          key={item.spotify_album_id}
-                          className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[100%]"
-                        >
-                          {album?.image ? (
-                            <img
-                              src={album.image}
-                              alt={`${album.name} cover`}
-                              className="absolute inset-0 h-full w-full object-cover"
-                            />
-                          ) : (
-                            <div className="absolute inset-0 flex items-center justify-center text-[10px] uppercase tracking-[0.3em] text-[var(--muted-strong)]">
-                              No art
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Link>
+                  <Link href={`/lists/${list.id}`} className="mt-4 block">
+                    <div className="grid grid-cols-4 gap-2">
+                      {list.items.length === 0 && (
+                        <p className="col-span-full text-xs text-[var(--muted)]">
+                          No albums yet.
+                        </p>
+                      )}
+                      {list.items.slice(0, 4).map((item) => {
+                        const album = albumMap[item.spotify_album_id];
+                        return (
+                          <div
+                            key={item.spotify_album_id}
+                            className="relative w-full overflow-hidden border border-[color:var(--border)] bg-[#0b0d12] pb-[100%]"
+                          >
+                            {album?.image ? (
+                              <img
+                                src={album.image}
+                                alt={`${album.name} cover`}
+                                className="absolute inset-0 h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="absolute inset-0 flex items-center justify-center text-[10px] uppercase tracking-[0.3em] text-[var(--muted-strong)]">
+                                No art
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Link>
+                </div>
               ))}
             </div>
           </section>

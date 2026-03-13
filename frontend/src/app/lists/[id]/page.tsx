@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 type User = {
   id: number;
@@ -46,6 +46,7 @@ export default function ListPage() {
   const params = useParams();
   const rawId = params?.id;
   const listId = Array.isArray(rawId) ? rawId[0] : rawId;
+  const router = useRouter();
 
   const [user, setUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -65,6 +66,12 @@ export default function ListPage() {
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [rankedSaving, setRankedSaving] = useState(false);
   const [rankedError, setRankedError] = useState<string | null>(null);
+  const [listDeleting, setListDeleting] = useState(false);
+  const [listDeleteError, setListDeleteError] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [titleSaving, setTitleSaving] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
 
   const suggestionOpen = useMemo(
     () => query.trim().length > 1 && suggestions.length > 0,
@@ -130,6 +137,9 @@ export default function ListPage() {
         const data = await response.json();
         if (!cancelled) {
           setList(data.list || null);
+          if (data.list?.title) {
+            setTitleDraft(data.list.title);
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -385,6 +395,90 @@ export default function ListPage() {
     }
   }
 
+  async function handleTitleSave() {
+    if (!listId) {
+      return;
+    }
+
+    const nextTitle = titleDraft.trim();
+    if (!nextTitle) {
+      setTitleError("Title is required.");
+      return;
+    }
+
+    setTitleSaving(true);
+    setTitleError(null);
+    try {
+      const response = await fetch(`${apiUrl}/lists/${listId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ title: nextTitle }),
+      });
+
+      if (response.status === 401) {
+        setTitleError("Sign in to update this list.");
+        return;
+      }
+
+      if (!response.ok) {
+        setTitleError("Could not update list title.");
+        return;
+      }
+
+      const data = await response.json();
+      setList((prev) =>
+        prev ? { ...prev, title: data.list?.title || nextTitle } : prev
+      );
+      setEditingTitle(false);
+    } catch (err) {
+      setTitleError("Could not update list title.");
+    } finally {
+      setTitleSaving(false);
+    }
+  }
+
+  function handleTitleCancel() {
+    setEditingTitle(false);
+    setTitleError(null);
+    setTitleDraft(list?.title || "");
+  }
+
+  async function handleDeleteList() {
+    if (!listId) {
+      return;
+    }
+
+    if (!window.confirm("Delete this list?")) {
+      return;
+    }
+
+    setListDeleting(true);
+    setListDeleteError(null);
+    try {
+      const response = await fetch(`${apiUrl}/lists/${listId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      if (response.status === 401) {
+        setListDeleteError("Sign in to delete this list.");
+        return;
+      }
+
+      if (!response.ok) {
+        setListDeleteError("Could not delete list.");
+        return;
+      }
+
+      router.push("/profile");
+    } catch (err) {
+      setListDeleteError("Could not delete list.");
+    } finally {
+      setListDeleting(false);
+    }
+  }
+
   function buildOrderedItems(
     items: ListItem[],
     sourceId: string,
@@ -512,9 +606,51 @@ export default function ListPage() {
             <p className="text-xs uppercase tracking-[0.4em] text-[var(--muted)]">
               Jukebox
             </p>
-            <h1 className="font-mono text-2xl font-semibold tracking-tight">
-              {list?.title || "Album list"}
-            </h1>
+            {editingTitle ? (
+              <div className="mt-2 space-y-2">
+                <input
+                  className="w-full max-w-md rounded-none border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--accent)]"
+                  value={titleDraft}
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                />
+                <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                  <button
+                    type="button"
+                    className="rounded-none bg-[var(--accent)] px-3 py-1 text-xs font-semibold text-[#0a140c] transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-strong)] disabled:text-[var(--muted)]"
+                    onClick={handleTitleSave}
+                    disabled={titleSaving}
+                  >
+                    {titleSaving ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    className="border border-[color:var(--border)] px-3 py-1 text-xs text-[var(--foreground)] transition hover:border-[var(--accent)]"
+                    onClick={handleTitleCancel}
+                    disabled={titleSaving}
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {titleError && (
+                  <div className="border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                    {titleError}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="font-mono text-2xl font-semibold tracking-tight">
+                  {list?.title || "Album list"}
+                </h1>
+                <button
+                  type="button"
+                  className="border border-[color:var(--border)] px-2 py-1 text-[10px] uppercase tracking-[0.3em] text-[var(--muted)] transition hover:border-[var(--accent)]"
+                  onClick={() => setEditingTitle(true)}
+                >
+                  Edit
+                </button>
+              </div>
+            )}
             {list?.description && (
               <p className="mt-2 text-sm text-[var(--muted)]">
                 {list.description}
@@ -534,6 +670,14 @@ export default function ListPage() {
             >
               Search
             </Link>
+            <button
+              type="button"
+              className="rounded-none border border-red-500/40 px-4 py-2 text-[var(--foreground)] transition hover:border-red-500 disabled:cursor-not-allowed disabled:text-red-300/60"
+              onClick={handleDeleteList}
+              disabled={listDeleting}
+            >
+              {listDeleting ? "Deleting..." : "Delete list"}
+            </button>
           </div>
         </header>
 
@@ -546,6 +690,11 @@ export default function ListPage() {
         {error && (
           <div className="border border-red-500/40 bg-red-500/10 p-6 text-sm text-red-200">
             {error}
+          </div>
+        )}
+        {listDeleteError && (
+          <div className="border border-red-500/40 bg-red-500/10 p-6 text-sm text-red-200">
+            {listDeleteError}
           </div>
         )}
 

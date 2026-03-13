@@ -272,6 +272,157 @@ app.post('/auth/logout', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/users/search', async (req, res) => {
+  const queryRaw = Array.isArray(req.query.query) ? req.query.query[0] : req.query.query;
+  const limitRaw = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+  const limit = Math.min(Math.max(parseInt(limitRaw || '10', 10), 1), 20);
+
+  if (!queryRaw || !queryRaw.trim()) {
+    return res.status(400).json({ error: 'query_required' });
+  }
+
+  const query = `%${queryRaw.trim()}%`;
+  const session = getSession(req);
+  const values = [query];
+  let where = '(display_name ILIKE $1 OR spotify_id ILIKE $1)';
+
+  if (session?.sub) {
+    values.push(session.sub);
+    where += ` AND id <> $${values.length}`;
+  }
+
+  values.push(limit);
+
+  try {
+    const result = await pool.query(
+      `SELECT id, spotify_id, display_name, avatar_url
+       FROM users
+       WHERE ${where}
+       ORDER BY display_name NULLS LAST, spotify_id
+       LIMIT $${values.length}`,
+      values
+    );
+
+    return res.json({ users: result.rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'user_search_failed' });
+  }
+});
+
+app.post('/users/:id/follow', requireAuth, async (req, res) => {
+  const targetId = parseInt(req.params.id, 10);
+
+  if (!targetId) {
+    return res.status(400).json({ error: 'user_id_required' });
+  }
+
+  if (targetId === req.user.sub) {
+    return res.status(400).json({ error: 'cannot_follow_self' });
+  }
+
+  try {
+    const targetResult = await pool.query(
+      'SELECT id FROM users WHERE id = $1',
+      [targetId]
+    );
+
+    if (targetResult.rows.length === 0) {
+      return res.status(404).json({ error: 'user_not_found' });
+    }
+
+    await pool.query(
+      `INSERT INTO follows (follower_id, following_id)
+       VALUES ($1, $2)
+       ON CONFLICT (follower_id, following_id) DO NOTHING`,
+      [req.user.sub, targetId]
+    );
+
+    return res.json({ status: 'ok', following_id: targetId });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'follow_failed' });
+  }
+});
+
+app.delete('/users/:id/follow', requireAuth, async (req, res) => {
+  const targetId = parseInt(req.params.id, 10);
+
+  if (!targetId) {
+    return res.status(400).json({ error: 'user_id_required' });
+  }
+
+  if (targetId === req.user.sub) {
+    return res.status(400).json({ error: 'cannot_follow_self' });
+  }
+
+  try {
+    await pool.query(
+      'DELETE FROM follows WHERE follower_id = $1 AND following_id = $2',
+      [req.user.sub, targetId]
+    );
+
+    return res.json({ status: 'ok', following_id: targetId });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'unfollow_failed' });
+  }
+});
+
+app.get('/users/:id/followers', async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const limitRaw = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+  const limit = Math.min(Math.max(parseInt(limitRaw || '20', 10), 1), 100);
+
+  if (!userId) {
+    return res.status(400).json({ error: 'user_id_required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.spotify_id, u.display_name, u.avatar_url, f.created_at
+       FROM follows f
+       JOIN users u ON u.id = f.follower_id
+       WHERE f.following_id = $1
+       ORDER BY f.created_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    return res.json({ followers: result.rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'followers_fetch_failed' });
+  }
+});
+
+app.get('/users/:id/following', async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const limitRaw = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+  const limit = Math.min(Math.max(parseInt(limitRaw || '20', 10), 1), 100);
+
+  if (!userId) {
+    return res.status(400).json({ error: 'user_id_required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.spotify_id, u.display_name, u.avatar_url, f.created_at
+       FROM follows f
+       JOIN users u ON u.id = f.following_id
+       WHERE f.follower_id = $1
+       ORDER BY f.created_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    return res.json({ following: result.rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'following_fetch_failed' });
+  }
+});
+
 app.get('/me/profile', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
@@ -904,12 +1055,14 @@ app.patch('/lists/:id', requireAuth, async (req, res) => {
   const listId = parseInt(req.params.id, 10);
   const isRanked =
     typeof req.body?.is_ranked === 'boolean' ? req.body.is_ranked : null;
+  const hasTitle = Object.prototype.hasOwnProperty.call(req.body || {}, 'title');
+  const hasDescription = Object.prototype.hasOwnProperty.call(req.body || {}, 'description');
 
   if (!listId) {
     return res.status(400).json({ error: 'list_id_required' });
   }
 
-  if (isRanked === null) {
+  if (isRanked === null && !hasTitle && !hasDescription) {
     return res.status(400).json({ error: 'update_required' });
   }
 
@@ -923,12 +1076,49 @@ app.patch('/lists/:id', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'list_not_found' });
     }
 
+    const updates = [];
+    const values = [];
+
+    if (isRanked !== null) {
+      updates.push(`is_ranked = $${values.length + 1}`);
+      values.push(isRanked);
+    }
+
+    if (hasTitle) {
+      const titleRaw =
+        typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+      if (!titleRaw) {
+        return res.status(400).json({ error: 'title_required' });
+      }
+      if (titleRaw.length > 120) {
+        return res.status(400).json({ error: 'title_too_long' });
+      }
+      updates.push(`title = $${values.length + 1}`);
+      values.push(titleRaw);
+    }
+
+    if (hasDescription) {
+      const descriptionRaw =
+        typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+      const description = descriptionRaw.length > 0 ? descriptionRaw : null;
+      if (description && description.length > 500) {
+        return res.status(400).json({ error: 'description_too_long' });
+      }
+      updates.push(`description = $${values.length + 1}`);
+      values.push(description);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'update_required' });
+    }
+
+    values.push(listId);
     const result = await pool.query(
       `UPDATE lists
-       SET is_ranked = $1
-       WHERE id = $2
+       SET ${updates.join(', ')}
+       WHERE id = $${values.length}
        RETURNING id, title, description, is_ranked, created_at`,
-      [isRanked, listId]
+      values
     );
 
     return res.json({ list: result.rows[0] });
@@ -1085,6 +1275,30 @@ app.post('/lists/:id/reorder', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'list_reorder_failed' });
+  }
+});
+
+app.delete('/lists/:id', requireAuth, async (req, res) => {
+  const listId = parseInt(req.params.id, 10);
+
+  if (!listId) {
+    return res.status(400).json({ error: 'list_id_required' });
+  }
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM lists WHERE id = $1 AND user_id = $2 RETURNING id',
+      [listId, req.user.sub]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'list_not_found' });
+    }
+
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'list_delete_failed' });
   }
 });
 

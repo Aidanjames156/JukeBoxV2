@@ -10,6 +10,11 @@ Endpoints:
 - `GET /auth/spotify/callback` handles Spotify OAuth
 - `GET /auth/me` returns the current user
 - `POST /auth/logout` clears the session
+- `GET /users/search?query=` search users (no auth required)
+- `POST /users/:id/follow` follow a user (auth required)
+- `DELETE /users/:id/follow` unfollow a user (auth required)
+- `GET /users/:id/followers` list followers (no auth required)
+- `GET /users/:id/following` list following (no auth required)
 - `GET /me/profile` fetch the current user's profile (auth required)
 - `PATCH /me/profile` update the current user's profile (auth required)
 - `POST /me/avatar` upload a profile photo (auth required)
@@ -23,7 +28,8 @@ Endpoints:
 - `GET /me/reviews` list the current user's reviews (auth required)
 - `GET /me/lists` list the current user's lists with album ids (auth required)
 - `POST /me/lists` create a new list (auth required)
-- `PATCH /lists/:id` update list settings (auth required)
+- `PATCH /lists/:id` update list settings/title/description (auth required)
 - `POST /lists/:id/items` add an album to a list (auth required)
 - `POST /lists/:id/reorder` reorder list items (auth required)
+- `DELETE /lists/:id` delete a list (auth required)
 - `GET /lists/:id` fetch a single list (auth required)
